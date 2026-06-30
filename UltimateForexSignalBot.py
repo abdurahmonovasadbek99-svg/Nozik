@@ -31,8 +31,9 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # ══════════════════════════════════════════════
 #  SOZLAMALAR
 # ══════════════════════════════════════════════
+import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-CHAT_ID   = os.environ.get("CHAT_ID",   "YOUR_CHAT_ID_HERE")
+CHAT_ID   = os.environ.get("CHAT_ID", "YOUR_CHAT_ID_HERE")
 
 # Juftliklar va Yahoo Finance tickerlari
 SYMBOL_MAP = {
