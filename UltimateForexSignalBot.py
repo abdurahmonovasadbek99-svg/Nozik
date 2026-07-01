@@ -666,10 +666,13 @@ class _PingHandler(BaseHTTPRequestHandler):
         pass  # Konsolni keraksiz log bilan to'ldirmaslik uchun
 
 def start_fake_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), _PingHandler)
-    log.info(f"Soxta HTTP server {port}-portda ishga tushdi (Render talabi uchun)")
-    server.serve_forever()
+    try:
+        port = int(os.environ.get("PORT", 10000))
+        server = HTTPServer(("0.0.0.0", port), _PingHandler)
+        log.info(f"✅ Soxta HTTP server {port}-portda ochildi (Render talabi uchun)")
+        server.serve_forever()
+    except Exception as e:
+        log.error(f"❌ Soxta server xatosi: {e}")
 
 def main():
     app=Application.builder().token(BOT_TOKEN).build()
@@ -682,4 +685,6 @@ def main():
     app.run_polling()
 
 if __name__=="__main__":
+    # PORT'ni HAMMA narsadan oldin, darhol ochamiz — Render buni tez ko'rishi kerak
+    threading.Thread(target=start_fake_server, daemon=True).start()
     main()
