@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v4.0 — Telegram Signal Bot
+UltimateForexSignalBot v5.0 — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, BTC-USD, EURUSD, GBPUSD
 
@@ -742,7 +742,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════
 async def cmd_start(update,context):
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v4.0*\n\n"
+        "👋 *UltimateForexSignalBot v5.0*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -872,14 +872,29 @@ def start_fake_server():
     except Exception as e:
         log.error(f"❌ Soxta server xatosi: {e}")
 
+async def _set_bot_commands(app):
+    """Telegram '/' menyusiga barcha komandalarni tavsif bilan o'rnatadi"""
+    from telegram import BotCommand
+    commands = [
+        BotCommand("start",     "🏠 Botni ishga tushirish"),
+        BotCommand("signal",    "📡 Hozirgi signallarni tekshirish"),
+        BotCommand("status",    "📊 Joriy narxlarni ko'rish"),
+        BotCommand("news",      "📰 Yaqin yangiliklar"),
+        BotCommand("sentiment", "🧠 Bozor kayfiyati (Fear & Greed)"),
+        BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr XAUUSD)"),
+        BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib BTCUSD)"),
+    ]
+    await app.bot.set_my_commands(commands)
+    log.info("✅ Bot komandalar menyusi o'rnatildi")
+
 def main():
-    app=Application.builder().token(BOT_TOKEN).build()
+    app=Application.builder().token(BOT_TOKEN).post_init(_set_bot_commands).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),
                    ("signal",cmd_signal),("news",cmd_news),
                    ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v4.0 ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v5.0 ishga tushdi!")
     app.run_polling()
 
 if __name__=="__main__":
