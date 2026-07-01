@@ -58,6 +58,7 @@ TRADING_START         = 7    # UTC (forex/metal uchun)
 TRADING_END           = 21   # UTC (forex/metal uchun)
 EOD_REMINDER_HOUR     = 20   # UTC
 MIN_SCORE             = 6    # Minimal ball
+REQUIRE_CONFIRMATION  = True # Signal chiqqach 1 bar tasdiqlashini kutish
 
 # ══════════════════════════════════════════════
 #  YANGILIKLAR JADVALI (2026, UTC)
@@ -241,6 +242,137 @@ def detect_patterns(df: pd.DataFrame) -> dict:
     return p
 
 # ══════════════════════════════════════════════
+#  TRENDLINE ANIQLASH (klassik texnik tahlil)
+# ══════════════════════════════════════════════
+def calc_trendline(df: pd.DataFrame, lookback: int = 40) -> dict:
+    """
+    Oxirgi N barda eng muhim ikkita pastki (support) yoki yuqori (resistance)
+    nuqta orqali trend chizig'ini chizadi va narx uni yaqinda buzganmi
+    (breakout) tekshiradi.
+    """
+    if len(df) < lookback:
+        lookback = len(df)
+    rec = df.tail(lookback).reset_index(drop=True)
+    h, l, c = rec["high"].values, rec["low"].values, rec["close"].values
+    n = len(c)
+
+    troughs = [i for i in range(2, n-2) if l[i]<l[i-1] and l[i]<l[i-2] and l[i]<l[i+1] and l[i]<l[i+2]]
+    peaks   = [i for i in range(2, n-2) if h[i]>h[i-1] and h[i]>h[i-2] and h[i]>h[i+1] and h[i]>h[i+2]]
+
+    result = {"uptrend_break": False, "downtrend_break": False,
+              "trendline_support": None, "trendline_resistance": None}
+
+    # Yuqoriga ko'tarilgan trend chizig'i (2 ta pastki nuqta orqali)
+    if len(troughs) >= 2:
+        i1, i2 = troughs[-2], troughs[-1]
+        if i2 > i1:
+            slope = (l[i2] - l[i1]) / (i2 - i1)
+            proj  = l[i2] + slope * (n-1 - i2)
+            result["trendline_support"] = round(proj, 5)
+            # Narx trend chizig'idan pastga tushib ketganmi (buzilish)
+            if slope > 0 and c[-1] < proj:
+                result["uptrend_break"] = True
+
+    # Pastga tushgan trend chizig'i (2 ta yuqori nuqta orqali)
+    if len(peaks) >= 2:
+        i1, i2 = peaks[-2], peaks[-1]
+        if i2 > i1:
+            slope = (h[i2] - h[i1]) / (i2 - i1)
+            proj  = h[i2] + slope * (n-1 - i2)
+            result["trendline_resistance"] = round(proj, 5)
+            # Narx trend chizig'idan yuqoriga chiqib ketganmi (buzilish)
+            if slope < 0 and c[-1] > proj:
+                result["downtrend_break"] = True
+
+    return result
+
+# ══════════════════════════════════════════════
+#  SMART MONEY CONCEPTS (SMC)
+# ══════════════════════════════════════════════
+def calc_smc(df: pd.DataFrame, lookback: int = 50) -> dict:
+    """
+    Smart Money Concepts tahlili:
+      - Market Structure: BOS (Break of Structure) / CHoCH (Change of Character)
+      - Liquidity: teng yuqori/past nuqtalar (stop-loss ov qilinadigan zonalar)
+      - Order Block: oxirgi kuchli qarama-qarshi sham (institutsional order zonasi)
+      - Fair Value Gap (FVG): 3 ta sham orasidagi narx bo'shlig'i
+    """
+    if len(df) < lookback:
+        lookback = len(df)
+    rec = df.tail(lookback).reset_index(drop=True)
+    o, h, l, c = rec["open"].values, rec["high"].values, rec["low"].values, rec["close"].values
+    n = len(c)
+
+    result = {
+        "bos_bullish": False, "bos_bearish": False,
+        "choch_bullish": False, "choch_bearish": False,
+        "liquidity_high": None, "liquidity_low": None,
+        "bullish_ob": None, "bearish_ob": None,
+        "fvg_bullish": None, "fvg_bearish": None,
+    }
+
+    # ── Market Structure (swing high/low) ──
+    swing_hi_idx = [i for i in range(2, n-2) if h[i]>h[i-1] and h[i]>h[i-2] and h[i]>h[i+1] and h[i]>h[i+2]]
+    swing_lo_idx = [i for i in range(2, n-2) if l[i]<l[i-1] and l[i]<l[i-2] and l[i]<l[i+1] and l[i]<l[i+2]]
+
+    price = c[-1]
+
+    # BOS (Break of Structure) — trend davom etayotganini tasdiqlaydi
+    if len(swing_hi_idx) >= 1:
+        last_high = h[swing_hi_idx[-1]]
+        if price > last_high:
+            result["bos_bullish"] = True
+    if len(swing_lo_idx) >= 1:
+        last_low = l[swing_lo_idx[-1]]
+        if price < last_low:
+            result["bos_bearish"] = True
+
+    # CHoCH (Change of Character) — trend YO'NALISHI o'zgarganini bildiradi
+    # (oldingi ikkita swing solishtiriladi: pastga ketayotgan trendda birinchi
+    #  yuqoriga sinish CHoCH hisoblanadi va aksincha)
+    if len(swing_lo_idx) >= 2:
+        prev_lo, cur_lo = l[swing_lo_idx[-2]], l[swing_lo_idx[-1]]
+        if cur_lo > prev_lo and len(swing_hi_idx) >= 1 and price > h[swing_hi_idx[-1]]:
+            result["choch_bullish"] = True
+    if len(swing_hi_idx) >= 2:
+        prev_hi, cur_hi = h[swing_hi_idx[-2]], h[swing_hi_idx[-1]]
+        if cur_hi < prev_hi and len(swing_lo_idx) >= 1 and price < l[swing_lo_idx[-1]]:
+            result["choch_bearish"] = True
+
+    # ── Liquidity zones (deyarli teng yuqori/past nuqtalar) ──
+    if len(swing_hi_idx) >= 2:
+        h1, h2 = h[swing_hi_idx[-2]], h[swing_hi_idx[-1]]
+        if abs(h1-h2)/max(h1,h2) < 0.0015:
+            result["liquidity_high"] = round(max(h1,h2), 5)
+    if len(swing_lo_idx) >= 2:
+        l1, l2 = l[swing_lo_idx[-2]], l[swing_lo_idx[-1]]
+        if abs(l1-l2)/max(l1,l2) < 0.0015:
+            result["liquidity_low"] = round(min(l1,l2), 5)
+
+    # ── Order Block: kuchli harakatdan oldingi oxirgi qarama-qarshi sham ──
+    # Bullish OB: kuchli yuqoriga harakatdan oldingi oxirgi qizil sham
+    for i in range(n-3, max(n-15,1), -1):
+        if c[i] < o[i] and c[i+1] > o[i+1] and (c[i+1]-o[i+1]) > (h[i]-l[i])*0.8:
+            result["bullish_ob"] = {"top": round(h[i],5), "bottom": round(l[i],5)}
+            break
+    # Bearish OB: kuchli pastga harakatdan oldingi oxirgi yashil sham
+    for i in range(n-3, max(n-15,1), -1):
+        if c[i] > o[i] and c[i+1] < o[i+1] and (o[i+1]-c[i+1]) > (h[i]-l[i])*0.8:
+            result["bearish_ob"] = {"top": round(h[i],5), "bottom": round(l[i],5)}
+            break
+
+    # ── Fair Value Gap (FVG) — 3 sham orasidagi bo'shliq ──
+    if n >= 3:
+        # Bullish FVG: 1-sham high < 3-sham low (orada bo'shliq qoladi)
+        if h[-3] < l[-1]:
+            result["fvg_bullish"] = {"top": round(l[-1],5), "bottom": round(h[-3],5)}
+        # Bearish FVG: 1-sham low > 3-sham high
+        if l[-3] > h[-1]:
+            result["fvg_bearish"] = {"top": round(l[-3],5), "bottom": round(h[-1],5)}
+
+    return result
+
+# ══════════════════════════════════════════════
 #  INDIKATORLAR
 # ══════════════════════════════════════════════
 def calc_ind(df: pd.DataFrame) -> dict:
@@ -287,9 +419,11 @@ def get_htf(symbol: str) -> str | None:
 # ══════════════════════════════════════════════
 #  SIGNAL GENERATSIYA
 # ══════════════════════════════════════════════
-def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf) -> dict | None:
+def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None) -> dict | None:
     B=0; S=0; R=[]
     p=ind["price"]; atr=ind["atr"]; adx=ind["adx"]
+    trend = trend or {}
+    smc   = smc or {}
 
     # 1. EMA
     if ind["e10_1"]<ind["e50_1"] and ind["e10"]>ind["e50"]: B+=2; R.append("📈 EMA kesishdi (yuqori)")
@@ -369,6 +503,41 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf) -> dict | None:
     elif htf=="DOWN":
         B=int(B*0.5)
         if S>0: R.append("✅ 4H trend: pastga (SELL mos)")
+
+    # 13. Trendline breakout (klassik texnik tahlil)
+    if trend.get("uptrend_break"):
+        S+=2; R.append(f"📏 Ko'tarilgan trendline buzildi: {trend.get('trendline_support')}")
+    if trend.get("downtrend_break"):
+        B+=2; R.append(f"📏 Tushgan trendline buzildi: {trend.get('trendline_resistance')}")
+
+    # 14. Smart Money Concepts (SMC)
+    if smc.get("choch_bullish"):
+        B+=3; R.append("🧠 SMC: CHoCH — trend BUY'ga o'zgardi")
+    elif smc.get("bos_bullish"):
+        B+=2; R.append("🧠 SMC: BOS — yuqoriga trend davom etmoqda")
+    if smc.get("choch_bearish"):
+        S+=3; R.append("🧠 SMC: CHoCH — trend SELL'ga o'zgardi")
+    elif smc.get("bos_bearish"):
+        S+=2; R.append("🧠 SMC: BOS — pastga trend davom etmoqda")
+
+    bull_ob = smc.get("bullish_ob")
+    bear_ob = smc.get("bearish_ob")
+    if bull_ob and bull_ob["bottom"] <= p <= bull_ob["top"]*1.001:
+        B+=2; R.append(f"🟦 Bullish Order Block zonasida: {bull_ob['bottom']}-{bull_ob['top']}")
+    if bear_ob and bear_ob["bottom"]*0.999 <= p <= bear_ob["top"]:
+        S+=2; R.append(f"🟥 Bearish Order Block zonasida: {bear_ob['bottom']}-{bear_ob['top']}")
+
+    fvg_b = smc.get("fvg_bullish")
+    fvg_s = smc.get("fvg_bearish")
+    if fvg_b and fvg_b["bottom"] <= p <= fvg_b["top"]:
+        B+=1; R.append(f"⚡ Bullish FVG ichida: {fvg_b['bottom']}-{fvg_b['top']}")
+    if fvg_s and fvg_s["bottom"] <= p <= fvg_s["top"]:
+        S+=1; R.append(f"⚡ Bearish FVG ichida: {fvg_s['bottom']}-{fvg_s['top']}")
+
+    if smc.get("liquidity_high") and p < smc["liquidity_high"] < p + atr*2:
+        R.append(f"💧 Yuqori likvidlik zonasi yaqinda: {smc['liquidity_high']} (stop-hunt xavfi)")
+    if smc.get("liquidity_low") and p - atr*2 < smc["liquidity_low"] < p:
+        R.append(f"💧 Past likvidlik zonasi yaqinda: {smc['liquidity_low']} (stop-hunt xavfi)")
 
     # Natija
     direction=None; score=0
@@ -468,6 +637,7 @@ def fmt_news_alert(news,symbol) -> str:
 _sent_news   = set()
 _daily       = {}
 _eod_sent    = set()
+_pending     = {}   # {symbol: {"direction": "BUY", "score": 8, "price": ...}} — tasdiq kutayotgan signal
 
 def is_session(symbol: str, now: datetime) -> bool:
     """Bitcoin 24/7, qolganlar sessiya vaqtida"""
@@ -529,7 +699,33 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             fib=calc_fib(df)
             vol=calc_volume(df)
             htf=get_htf(symbol)
-            sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf)
+            trend=calc_trendline(df)
+            smc  =calc_smc(df)
+            sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc)
+
+            # ── Confirmation bar mantiqi ──
+            # Signal birinchi chiqqanda darhol yubormaymiz — "kutish ro'yxati"ga
+            # qo'yamiz. Keyingi tekshiruvda (CHECK_INTERVAL daqiqadan keyin) agar
+            # narx hali ham signal yo'nalishida bo'lsa — bu safar yuboramiz.
+            # Bu soxta (false) signallarning ko'p qismini filtrlaydi.
+            if REQUIRE_CONFIRMATION:
+                prev = _pending.get(symbol)
+                if sig:
+                    if prev and prev["direction"] == sig["direction"]:
+                        # Tasdiqlandi — narx hali ham o'sha yo'nalishda ketmoqda
+                        confirmed = (
+                            (sig["direction"]=="BUY"  and sig["price"] >= prev["price"]) or
+                            (sig["direction"]=="SELL" and sig["price"] <= prev["price"])
+                        )
+                        del _pending[symbol]
+                        if not confirmed:
+                            sig = None  # narx orqaga ketdi — signal bekor
+                    else:
+                        # Birinchi marta chiqdi — kutish ro'yxatiga qo'yamiz, hozircha yubormaymiz
+                        _pending[symbol] = {"direction": sig["direction"], "price": sig["price"]}
+                        sig = None
+                else:
+                    _pending.pop(symbol, None)
 
             if sig:
                 reg_signal(symbol,now)
@@ -579,7 +775,7 @@ async def cmd_status(update,context):
     await update.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_signal(update,context):
-    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda...")
+    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda (SMC + Trendline bilan)...")
     sentiment=get_sentiment(); found=0
     for sym in SYMBOLS:
         df=get_price_data(sym)
@@ -587,10 +783,12 @@ async def cmd_signal(update,context):
         ind=calc_ind(df); pat=detect_patterns(df)
         sr=calc_sr(df); fib=calc_fib(df)
         vol=calc_volume(df); htf=get_htf(sym)
-        sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf)
+        trend=calc_trendline(df); smc=calc_smc(df)
+        sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc)
         if sig:
             found+=1
             msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
+            msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal esa tasdiqlash uchun 1 bar kutadi._"
             await update.message.reply_text(msg,parse_mode="Markdown")
     if not found:
         await update.message.reply_text("⏸ Hozircha kuchli signal yo'q.")
