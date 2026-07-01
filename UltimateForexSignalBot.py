@@ -592,7 +592,7 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
          f"🛡️ SL:    `{sig['sl']}`\n"
          f"📊 RSI:   `{sig['rsi']}`\n"
          f"📈 ADX:   `{sig['adx']}`\n"
-         f"⭐ Ball:  `{sig['score']}/20`\n"
+         f"⭐ Ball:  `{sig['score']}/30`\n"
          f"⏰ Vaqt:  `{now}`\n"
          f"📅 Qoldi: `{remaining}/{MAX_DAILY_SIGNALS}`\n"
          f"━━━━━━━━━━━━━━━━━━\n")
