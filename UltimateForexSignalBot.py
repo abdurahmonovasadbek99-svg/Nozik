@@ -23,17 +23,20 @@ Intraday:
   Bitcoin:     00:00–24:00 UTC (24/7)
 """
 
-import os, logging
+import os, logging, threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 import requests, pandas as pd, ta
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+# MUHIM: python-telegram-bot[job-queue] o'rnatilishi kerak, aks holda
+# job_queue = None bo'lib qoladi va run_repeating xato beradi.
+
 # ══════════════════════════════════════════════
 #  SOZLAMALAR
 # ══════════════════════════════════════════════
-import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-CHAT_ID   = os.environ.get("CHAT_ID", "YOUR_CHAT_ID_HERE")
+CHAT_ID   = os.environ.get("CHAT_ID",   "YOUR_CHAT_ID_HERE")
 
 # Juftliklar va Yahoo Finance tickerlari
 SYMBOL_MAP = {
@@ -650,6 +653,24 @@ async def cmd_fib(update,context):
 # ══════════════════════════════════════════════
 #  ISHGA TUSHIRISH
 # ══════════════════════════════════════════════
+# ══════════════════════════════════════════════
+#  SOXTA HTTP SERVER (Render "Web Service" talabi uchun)
+# ══════════════════════════════════════════════
+class _PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"UltimateForexSignalBot ishlamoqda!")
+    def log_message(self, format, *args):
+        pass  # Konsolni keraksiz log bilan to'ldirmaslik uchun
+
+def start_fake_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), _PingHandler)
+    log.info(f"Soxta HTTP server {port}-portda ishga tushdi (Render talabi uchun)")
+    server.serve_forever()
+
 def main():
     app=Application.builder().token(BOT_TOKEN).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),
