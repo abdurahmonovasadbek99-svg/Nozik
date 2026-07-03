@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v5.0 — Telegram Signal Bot
+UltimateForexSignalBot v7.0 (ICT/SMC) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
-Juftliklar: XAUUSD, XAGUSD, BTC-USD, EURUSD, GBPUSD
+Juftliklar: XAUUSD, XAGUSD, BTCUSD, EURUSD, GBPUSD, SPX500
 
-Signal manbalari (12 ta):
-  1.  EMA trend (10/50)
-  2.  RSI (14)
-  3.  MACD kesishishi
-  4.  Bollinger Bands
-  5.  Stochastic Oscillator
-  6.  ADX (trend kuchi)
-  7.  Klassik patternlar (Pin Bar, Engulfing, Double Top/Bottom, Doji)
-  8.  Fibonacci darajalari (0.382, 0.5, 0.618)
-  9.  Support / Resistance darajalari
- 10.  Volume tahlili
- 11.  Sentiment (Fear & Greed Index)
- 12.  Multi-timeframe tasdiqlash (15m + 4h)
+Signal manbalari (ICT / Smart Money Concepts asosida):
+  1.  EMA trend (10/50) — umumiy yo'nalish
+  2.  ICT Premium/Discount zonalar — Equilibrium asosida
+  3.  ICT Killzones — London/NY yuqori faollik soatlari
+  4.  ADX — trend kuchi filtri
+  5.  Klassik shamcha patternlari (Pin Bar, Engulfing, Double Top/Bottom, Doji)
+  6.  Fibonacci darajalari (0.382, 0.5, 0.618)
+  7.  Support / Resistance (SNR) darajalari
+  8.  Volume tahlili
+  9.  Sentiment (Fear & Greed Index)
+ 10.  Trendline breakout — klassik chiziqli trend siniши
+ 11.  Smart Money: BOS / CHoCH (Market Structure)
+ 12.  Smart Money: Order Blocks
+ 13.  Smart Money: Imbalans / Fair Value Gap (FVG)
+ 14.  Smart Money: Liquidity zones (stop-hunt ogohlantirishi)
+ 15.  Multi-timeframe tasdiqlash (15m + 4h)
 
-Intraday:
+Filtrlar:
+  - Risk-Reward (min 1.8)
+  - Volatillik (juda tinch/notinch bozorni chetlab o'tish)
+  - Correlation (EURUSD/GBPUSD ziddiyati)
+  - Confirmation bar (signal 1 bar kutib tasdiqlanadi)
+
+Eslatma: RSI, MACD, Stochastic, Bollinger Bands ATAYLAB olib
+tashlangan — bular "lagging" (kechikuvchi) indikatorlar bo'lib, ICT/SMC
+metodologiyasida narx harakati (price action) va institutsional order
+oqimi tahlili ustunlik qiladi.
+
+Intraday/Swing:
   Forex/Metal: 07:00–21:00 UTC (London + NY sessiyasi)
+  SPX500:      13:30–20:00 UTC (AQSh birja sessiyasi, dam olish kunlari yopiq)
   Bitcoin:     00:00–24:00 UTC (24/7)
 """
 
@@ -37,6 +52,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # ══════════════════════════════════════════════
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 CHAT_ID   = os.environ.get("CHAT_ID",   "YOUR_CHAT_ID_HERE")
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")  # finnhub.io — bepul ro'yxatdan o'ting
 
 # Juftliklar va Yahoo Finance tickerlari
 SYMBOL_MAP = {
@@ -45,15 +61,17 @@ SYMBOL_MAP = {
     "BTCUSD":  "BTC-USD",   # Bitcoin
     "EURUSD":  "EURUSD=X",  # Euro/Dollar
     "GBPUSD":  "GBPUSD=X",  # Funt/Dollar
+    "SPX500":  "^GSPC",     # S&P 500 indeksi
 }
 SYMBOLS = list(SYMBOL_MAP.keys())
 
-# Bitcoin 24/7 ishlaydi — alohida belgi
+# Bitcoin va SPX500 boshqa sessiyaga ega
 CRYPTO_SYMBOLS = {"BTCUSD"}
+INDEX_SYMBOLS  = {"SPX500"}   # AQSh birja sessiyasi: 13:30-20:00 UTC (qishda), yozda 13:30-20:00
 
 # Intraday sozlamalar
 CHECK_INTERVAL        = 5    # daqiqa
-MAX_DAILY_SIGNALS     = 6    # har juftlik uchun
+MAX_DAILY_SIGNALS     = 6    # har juftlik + har rejim uchun (Intraday va Swing alohida hisoblanadi)
 TRADING_START         = 7    # UTC (forex/metal uchun)
 TRADING_END           = 21   # UTC (forex/metal uchun)
 EOD_REMINDER_HOUR     = 20   # UTC
@@ -61,33 +79,84 @@ MIN_SCORE             = 6    # Minimal ball
 REQUIRE_CONFIRMATION  = True # Signal chiqqach 1 bar tasdiqlashini kutish
 
 # ══════════════════════════════════════════════
-#  YANGILIKLAR JADVALI (2026, UTC)
+#  YANGILIKLAR — FINNHUB API ORQALI AVTOMATIK
 # ══════════════════════════════════════════════
-NEWS_CALENDAR = [
-    # IYUL 2026
-    {"date":"2026-07-03 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-07-09 12:30","name":"🔴 CPI Inflation Data",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","BTCUSD"]},
-    {"date":"2026-07-15 13:15","name":"🟡 Retail Sales",            "impact":2,"pairs":["EURUSD","GBPUSD"]},
-    {"date":"2026-07-28 18:00","name":"🔴 FOMC Rate Decision",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-07-28 18:30","name":"🔴 Fed Press Conference",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","BTCUSD"]},
-    {"date":"2026-07-30 12:30","name":"🔴 GDP Advance Q2",          "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD"]},
-    # AVGUST 2026
-    {"date":"2026-08-07 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-08-12 12:30","name":"🔴 CPI Inflation Data",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","BTCUSD"]},
-    {"date":"2026-08-22 14:00","name":"🔴 Fed Chair Jackson Hole",  "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    # SENTABR 2026
-    {"date":"2026-09-04 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-09-16 18:00","name":"🔴 FOMC Rate Decision",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    # OKTABR 2026
-    {"date":"2026-10-02 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-10-29 18:00","name":"🔴 FOMC Rate Decision",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    # NOYABR 2026
-    {"date":"2026-11-06 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-11-12 12:30","name":"🔴 CPI Inflation Data",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","BTCUSD"]},
-    # DEKABR 2026
-    {"date":"2026-12-04 12:30","name":"🔴 NFP Non-Farm Payroll",    "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-    {"date":"2026-12-16 18:00","name":"🔴 FOMC Rate Decision",      "impact":3,"pairs":["EURUSD","GBPUSD","XAUUSD","XAGUSD","BTCUSD"]},
-]
+# Qo'lda yozilgan jadval o'rniga endi Finnhub.io iqtisodiy taqvimidan
+# real vaqtda olinadi. Bepul API kalitni https://finnhub.io da oling
+# va Render'da FINNHUB_API_KEY environment variable sifatida kiriting.
+#
+# Agar FINNHUB_API_KEY bo'sh bo'lsa, bot ishlayveradi, lekin yangilik
+# ogohlantirishlarisiz (faqat texnik signal bilan).
+
+# Qaysi valyuta har bir juftlikka daxldor (Finnhub "country" maydoniga qarab)
+PAIR_COUNTRY_MAP = {
+    "EURUSD": {"EU", "US"},
+    "GBPUSD": {"GB", "US"},
+    "XAUUSD": {"US"},
+    "XAGUSD": {"US"},
+    "BTCUSD": {"US"},
+    "SPX500": {"US"},
+}
+
+_news_cache = {"data": None, "updated": None}
+
+def fetch_news_calendar() -> list:
+    """
+    Finnhub'dan keyingi 14 kunlik iqtisodiy taqvimni oladi va bizning
+    ichki formatga o'giradi. Natija 1 soatga keshlanadi (ortiqcha
+    so'rov yubormaslik uchun).
+    """
+    now = datetime.now(timezone.utc)
+    if _news_cache["data"] is not None and _news_cache["updated"] is not None:
+        if (now - _news_cache["updated"]).seconds < 3600:
+            return _news_cache["data"]
+
+    if not FINNHUB_API_KEY:
+        return []
+
+    try:
+        frm = now.strftime("%Y-%m-%d")
+        to  = (now + pd.Timedelta(days=14)).strftime("%Y-%m-%d")
+        r = requests.get(
+            "https://finnhub.io/api/v1/calendar/economic",
+            params={"from": frm, "to": to, "token": FINNHUB_API_KEY},
+            timeout=10
+        )
+        raw = r.json().get("economicCalendar", [])
+
+        events = []
+        for ev in raw:
+            impact_map = {"low": 1, "medium": 2, "high": 3}
+            impact = impact_map.get(str(ev.get("impact", "")).lower(), 1)
+            if impact < 2:
+                continue  # kichik ta'sirli yangiliklarni o'tkazib yuboramiz
+
+            country = ev.get("country", "")
+            pairs = [p for p, countries in PAIR_COUNTRY_MAP.items() if country in countries]
+            if not pairs:
+                continue
+
+            date_str = ev.get("time", "")  # "2026-07-03 12:30:00"
+            if not date_str:
+                continue
+            date_fmt = date_str[:16]  # "YYYY-MM-DD HH:MM"
+
+            emoji = "🔴" if impact == 3 else "🟡"
+            events.append({
+                "date":   date_fmt,
+                "name":   f"{emoji} {ev.get('event', 'Iqtisodiy yangilik')}",
+                "impact": impact,
+                "pairs":  pairs,
+            })
+
+        _news_cache["data"]    = events
+        _news_cache["updated"] = now
+        log.info(f"📰 Finnhub'dan {len(events)} ta yangilik yuklandi")
+        return events
+
+    except Exception as e:
+        log.error(f"Finnhub yangiliklar xatosi: {e}")
+        return _news_cache["data"] or []
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -373,30 +442,67 @@ def calc_smc(df: pd.DataFrame, lookback: int = 50) -> dict:
     return result
 
 # ══════════════════════════════════════════════
+#  ICT: PREMIUM / DISCOUNT ZONALAR
+# ══════════════════════════════════════════════
+def calc_premium_discount(df: pd.DataFrame, lookback: int = 50) -> dict:
+    """
+    ICT konsepti: oxirgi swing range 50% (Equilibrium) ga bo'linadi.
+    - Discount zona (past 50%) — faqat BUY qidiriladi
+    - Premium zona (yuqori 50%) — faqat SELL qidiriladi
+    Bu "arzon joydan sotib ol, qimmat joydan sot" mantig'i.
+    """
+    if len(df) < lookback:
+        lookback = len(df)
+    rec = df.tail(lookback)
+    swing_hi = rec["high"].max()
+    swing_lo = rec["low"].min()
+    eq = (swing_hi + swing_lo) / 2  # Equilibrium (50%)
+    price = df["close"].iloc[-1]
+
+    zone = "premium" if price > eq else "discount"
+    pct_in_range = round((price - swing_lo) / (swing_hi - swing_lo) * 100, 1) if swing_hi != swing_lo else 50.0
+
+    return {
+        "zone": zone,
+        "equilibrium": round(eq, 5),
+        "swing_hi": round(swing_hi, 5),
+        "swing_lo": round(swing_lo, 5),
+        "pct_in_range": pct_in_range,   # 0% = eng past, 100% = eng yuqori
+    }
+
+# ══════════════════════════════════════════════
+#  ICT: KILLZONES (yuqori likvidlik savdo soatlari)
+# ══════════════════════════════════════════════
+def get_ict_killzone(now: datetime) -> str | None:
+    """
+    ICT konsepti bo'yicha eng faol savdo oynalari (UTC vaqtida):
+      - London Killzone:    07:00-10:00
+      - New York Killzone:  12:00-15:00
+      - London Close:       15:00-17:00
+    Bu vaqtlarda institutsional harakat ehtimoli yuqori hisoblanadi.
+    """
+    h = now.hour
+    if 7 <= h < 10:
+        return "London Killzone"
+    if 12 <= h < 15:
+        return "New York Killzone"
+    if 15 <= h < 17:
+        return "London Close"
+    return None
+
+# ══════════════════════════════════════════════
 #  INDIKATORLAR
 # ══════════════════════════════════════════════
 def calc_ind(df: pd.DataFrame) -> dict:
     c,h,l = df["close"],df["high"],df["low"]
     e10=ta.trend.EMAIndicator(c,10).ema_indicator()
     e50=ta.trend.EMAIndicator(c,50).ema_indicator()
-    rsi=ta.momentum.RSIIndicator(c,14).rsi()
-    mc=ta.trend.MACD(c,26,12,9)
-    bb=ta.volatility.BollingerBands(c,20,2)
-    st=ta.momentum.StochasticOscillator(h,l,c,14,3)
     adx=ta.trend.ADXIndicator(h,l,c,14)
     atr=ta.volatility.AverageTrueRange(h,l,c,14).average_true_range()
     return {
         "price":   round(c.iloc[-1],5),
         "e10":     e10.iloc[-1], "e10_1": e10.iloc[-2],
         "e50":     e50.iloc[-1], "e50_1": e50.iloc[-2],
-        "rsi":     round(rsi.iloc[-1],2),
-        "macd":    mc.macd().iloc[-1],    "macd_s": mc.macd_signal().iloc[-1],
-        "macd_1":  mc.macd().iloc[-2],    "macd_s1":mc.macd_signal().iloc[-2],
-        "bb_up":   round(bb.bollinger_hband().iloc[-1],5),
-        "bb_mid":  round(bb.bollinger_mavg().iloc[-1],5),
-        "bb_low":  round(bb.bollinger_lband().iloc[-1],5),
-        "stk":     round(st.stoch().iloc[-1],2),
-        "std":     round(st.stoch_signal().iloc[-1],2),
         "adx":     round(adx.adx().iloc[-1],2),
         "atr":     round(atr.iloc[-1],5),
     }
@@ -419,39 +525,34 @@ def get_htf(symbol: str) -> str | None:
 # ══════════════════════════════════════════════
 #  SIGNAL GENERATSIYA
 # ══════════════════════════════════════════════
-def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None) -> dict | None:
+def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,pd_zone=None,killzone=None,mode="intraday") -> dict | None:
     B=0; S=0; R=[]
     p=ind["price"]; atr=ind["atr"]; adx=ind["adx"]
-    trend = trend or {}
-    smc   = smc or {}
+    trend  = trend or {}
+    smc    = smc or {}
+    pd_zone= pd_zone or {}
 
-    # 1. EMA
+    # 1. EMA (umumiy trend yo'nalishi)
     if ind["e10_1"]<ind["e50_1"] and ind["e10"]>ind["e50"]: B+=2; R.append("📈 EMA kesishdi (yuqori)")
     elif ind["e10"]>ind["e50"]: B+=1; R.append("📈 Trend: yuqori")
     if ind["e10_1"]>ind["e50_1"] and ind["e10"]<ind["e50"]: S+=2; R.append("📉 EMA kesishdi (pastga)")
     elif ind["e10"]<ind["e50"]: S+=1; R.append("📉 Trend: pastga")
 
-    # 2. RSI
-    if ind["rsi"]<30:   B+=2; R.append(f"🟢 RSI oversold: {ind['rsi']}")
-    elif ind["rsi"]<45: B+=1
-    if ind["rsi"]>70:   S+=2; R.append(f"🔴 RSI overbought: {ind['rsi']}")
-    elif ind["rsi"]>55: S+=1
+    # 2. ICT Premium/Discount — faqat to'g'ri zonadan signal qidiramiz
+    if pd_zone:
+        if pd_zone["zone"] == "discount":
+            B+=2; R.append(f"💰 Discount zonada ({pd_zone['pct_in_range']}%) — BUY qulay")
+            S = max(0, S-2)  # Premium zonada bo'lmasa SELL ehtimoli pasayadi
+        else:
+            S+=2; R.append(f"💎 Premium zonada ({pd_zone['pct_in_range']}%) — SELL qulay")
+            B = max(0, B-2)
 
-    # 3. MACD
-    if ind["macd_1"]<ind["macd_s1"] and ind["macd"]>ind["macd_s"]: B+=2; R.append("⚡ MACD yuqoriga")
-    elif ind["macd"]>ind["macd_s"]: B+=1
-    if ind["macd_1"]>ind["macd_s1"] and ind["macd"]<ind["macd_s"]: S+=2; R.append("⚡ MACD pastga")
-    elif ind["macd"]<ind["macd_s"]: S+=1
-
-    # 4. Bollinger
-    if p<ind["bb_low"]:  B+=2; R.append(f"🎯 BB quyi: {ind['bb_low']}")
-    elif p<ind["bb_mid"]: B+=1
-    if p>ind["bb_up"]:   S+=2; R.append(f"🎯 BB yuqori: {ind['bb_up']}")
-    elif p>ind["bb_mid"]: S+=1
-
-    # 5. Stochastic
-    if ind["stk"]<20 and ind["stk"]>ind["std"]: B+=1; R.append(f"🔵 Stoch oversold: {ind['stk']}")
-    if ind["stk"]>80 and ind["stk"]<ind["std"]: S+=1; R.append(f"🔵 Stoch overbought: {ind['stk']}")
+    # 3. ICT Killzone — institutsional faollik vaqti
+    if killzone:
+        B_before, S_before = B, S
+        if B > 0 or S > 0:
+            B = int(B*1.3); S = int(S*1.3)
+            R.append(f"⏰ ICT Killzone: {killzone} (yuqori faollik vaqti)")
 
     # 6. ADX
     if adx<20:
@@ -530,9 +631,9 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None)
     fvg_b = smc.get("fvg_bullish")
     fvg_s = smc.get("fvg_bearish")
     if fvg_b and fvg_b["bottom"] <= p <= fvg_b["top"]:
-        B+=1; R.append(f"⚡ Bullish FVG ichida: {fvg_b['bottom']}-{fvg_b['top']}")
+        B+=3; R.append(f"⚡ Imbalans (Bullish FVG) ichida: {fvg_b['bottom']}-{fvg_b['top']}")
     if fvg_s and fvg_s["bottom"] <= p <= fvg_s["top"]:
-        S+=1; R.append(f"⚡ Bearish FVG ichida: {fvg_s['bottom']}-{fvg_s['top']}")
+        S+=3; R.append(f"⚡ Imbalans (Bearish FVG) ichida: {fvg_s['bottom']}-{fvg_s['top']}")
 
     if smc.get("liquidity_high") and p < smc["liquidity_high"] < p + atr*2:
         R.append(f"💧 Yuqori likvidlik zonasi yaqinda: {smc['liquidity_high']} (stop-hunt xavfi)")
@@ -545,16 +646,44 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None)
     elif S>=MIN_SCORE and S>B: direction,score = "SELL",S
     if not direction: return None
 
-    sl = round(p - atr*1.3, 5) if direction=="BUY" else round(p + atr*1.3, 5)
-    tp1= round(p + atr*2.0, 5) if direction=="BUY" else round(p - atr*2.0, 5)
-    tp2= round(p + atr*3.5, 5) if direction=="BUY" else round(p - atr*3.5, 5)
+    # ── VOLATILLIK FILTRI ──
+    # ATR narxga nisbatan juda kichik bo'lsa (juda tinch bozor) — signal ishonchsiz,
+    # juda katta bo'lsa (juda notinch, masalan yangilik payti) — xavf yuqori.
+    atr_pct = (atr / p) * 100 if p > 0 else 0
+    if atr_pct < 0.03:
+        R.append(f"⚠️ Volatillik juda past ({round(atr_pct,3)}%) — bozor tinch, signal rad etildi")
+        return None
+    if atr_pct > 2.5:
+        R.append(f"⚠️ Volatillik juda yuqori ({round(atr_pct,3)}%) — xavfli, signal rad etildi")
+        return None
+
+    # ── SL/TP — rejimga qarab (Intraday: tez, kichikroq | Swing: sekin, kattaroq) ──
+    if mode == "swing":
+        sl_mult, tp1_mult, tp2_mult = 2.0, 4.0, 7.0
+    else:  # intraday
+        sl_mult, tp1_mult, tp2_mult = 1.2, 2.0, 3.2
+
+    sl  = round(p - atr*sl_mult, 5)  if direction=="BUY" else round(p + atr*sl_mult, 5)
+    tp1 = round(p + atr*tp1_mult, 5) if direction=="BUY" else round(p - atr*tp1_mult, 5)
+    tp2 = round(p + atr*tp2_mult, 5) if direction=="BUY" else round(p - atr*tp2_mult, 5)
+
+    # ── RISK-REWARD FILTRI ──
+    # TP1 gacha bo'lgan masofa SL gacha bo'lgan masofadan kamida 1.6 baravar katta
+    # bo'lishi kerak, aks holda signal "yomon savdo" hisoblanadi va rad etiladi.
+    risk   = abs(p - sl)
+    reward = abs(tp1 - p)
+    rr     = round(reward / risk, 2) if risk > 0 else 0
+    min_rr = 1.6 if mode == "intraday" else 1.8
+    if rr < min_rr:
+        R.append(f"⚠️ Risk/Reward past ({rr}) — kamida {min_rr} talab qilinadi, signal rad etildi")
+        return None
 
     strength=("🔥🔥 ULTRA" if score>=14 else "🔥 JUDA KUCHLI" if score>=10
               else "✅ KUCHLI" if score>=7 else "🟡 O'RTA")
 
-    return {"direction":direction,"strength":strength,"score":score,
-            "price":p,"sl":sl,"tp1":tp1,"tp2":tp2,
-            "rsi":ind["rsi"],"adx":adx,"atr":atr,
+    return {"direction":direction,"strength":strength,"score":score,"mode":mode,
+            "price":p,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":rr,
+            "adx":adx,"atr":atr,"pd_zone":pd_zone,"killzone":killzone,
             "reasons":R,"sr":sr,"fib":fib,"sentiment":sentiment}
 
 # ══════════════════════════════════════════════
@@ -563,9 +692,12 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None)
 def check_news(symbol: str) -> list:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     out = []
-    for n in NEWS_CALENDAR:
+    for n in fetch_news_calendar():
         if symbol not in n["pairs"]: continue
-        nt   = datetime.strptime(n["date"],"%Y-%m-%d %H:%M")
+        try:
+            nt = datetime.strptime(n["date"],"%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
         diff = (nt-now).total_seconds()/60
         if -30<=diff<=120: out.append({**n,"diff_min":int(diff)})
     return out
@@ -575,7 +707,7 @@ def check_news(symbol: str) -> list:
 # ══════════════════════════════════════════════
 SYMBOL_EMOJI = {
     "XAUUSD":"🥇","XAGUSD":"🥈","BTCUSD":"₿",
-    "EURUSD":"💶","GBPUSD":"💷"
+    "EURUSD":"💶","GBPUSD":"💷","SPX500":"📈"
 }
 
 def fmt_signal(symbol,sig,news,remaining) -> str:
@@ -583,19 +715,28 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
     de = "🟢" if sig["direction"]=="BUY" else "🔴"
     now= datetime.now(timezone.utc).strftime("%H:%M UTC")
     sr = sig["sr"]; fib=sig["fib"]; fg=sig["sentiment"]
+    mode_label = "⚡ INTRADAY (15m)" if sig.get("mode")=="intraday" else "🐢 SWING (4h)"
 
     msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']}\n"
+         f"🏷️ {mode_label}\n"
          f"━━━━━━━━━━━━━━━━━━\n"
          f"💰 Narx:  `{sig['price']}`\n"
          f"🎯 TP1:   `{sig['tp1']}`\n"
          f"🎯 TP2:   `{sig['tp2']}`\n"
          f"🛡️ SL:    `{sig['sl']}`\n"
-         f"📊 RSI:   `{sig['rsi']}`\n"
+         f"⚖️ R:R:   `1:{sig['rr']}`\n"
          f"📈 ADX:   `{sig['adx']}`\n"
          f"⭐ Ball:  `{sig['score']}/30`\n"
          f"⏰ Vaqt:  `{now}`\n"
          f"📅 Qoldi: `{remaining}/{MAX_DAILY_SIGNALS}`\n"
          f"━━━━━━━━━━━━━━━━━━\n")
+
+    pz = sig.get("pd_zone")
+    if pz:
+        zone_label = "💰 Discount" if pz["zone"]=="discount" else "💎 Premium"
+        msg += f"📍 *ICT zona:* {zone_label} ({pz['pct_in_range']}%)\n"
+    if sig.get("killzone"):
+        msg += f"⏰ *Killzone:* {sig['killzone']}\n"
 
     if sr["support"] or sr["resistance"]:
         msg += "🧱 *S/R:*\n"
@@ -640,9 +781,12 @@ _eod_sent    = set()
 _pending     = {}   # {symbol: {"direction": "BUY", "score": 8, "price": ...}} — tasdiq kutayotgan signal
 
 def is_session(symbol: str, now: datetime) -> bool:
-    """Bitcoin 24/7, qolganlar sessiya vaqtida"""
+    """Bitcoin 24/7; SPX500 AQSh birja sessiyasida; qolganlar forex sessiyasida"""
     if symbol in CRYPTO_SYMBOLS:
         return True
+    if symbol in INDEX_SYMBOLS:
+        # AQSh fond birjasi taxminan 13:30-20:00 UTC (dam olish kunlari yopiq)
+        return now.weekday() < 5 and 13 <= now.hour < 20
     return TRADING_START <= now.hour < TRADING_END
 
 def can_signal(symbol,now) -> bool:
@@ -656,6 +800,11 @@ def reg_signal(symbol,now):
     if symbol not in _daily or _daily[symbol]["date"]!=today:
         _daily[symbol]={"date":today,"count":0}
     _daily[symbol]["count"]+=1
+
+# Korrelyatsiyalashgan juftliklar — bittasi BUY, ikkinchisi SELL bersa,
+# ikkalasi ham bir xil AQSh dollari harakatidan kelib chiqqan bo'lishi mumkin,
+# shuning uchun ziddiyat bo'lsa ikkalasi ham ehtiyot yuzasidan filtrlanadi.
+CORRELATED_PAIRS = [("EURUSD", "GBPUSD")]
 
 async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
     bot=context.bot
@@ -672,6 +821,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                   "₿ _Bitcoin savdosi davom etadi (24/7)_"))
 
     sentiment=get_sentiment()
+    candidate_signals = []   # [(symbol, mode, sig, nl)] — confirmation'dan o'tgan signallar
 
     for symbol in SYMBOLS:
         try:
@@ -688,67 +838,96 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                         await bot.send_message(chat_id=CHAT_ID,parse_mode="Markdown",
                                                text=fmt_news_alert(n,symbol))
 
-            if not can_signal(symbol,now): continue
-
-            df=get_price_data(symbol)
-            if df is None or len(df)<60: continue
-
-            ind=calc_ind(df)
-            pat=detect_patterns(df)
-            sr =calc_sr(df)
-            fib=calc_fib(df)
-            vol=calc_volume(df)
             htf=get_htf(symbol)
-            trend=calc_trendline(df)
-            smc  =calc_smc(df)
-            sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc)
+            killzone=get_ict_killzone(now)
 
-            # ── Confirmation bar mantiqi ──
-            # Signal birinchi chiqqanda darhol yubormaymiz — "kutish ro'yxati"ga
-            # qo'yamiz. Keyingi tekshiruvda (CHECK_INTERVAL daqiqadan keyin) agar
-            # narx hali ham signal yo'nalishida bo'lsa — bu safar yuboramiz.
-            # Bu soxta (false) signallarning ko'p qismini filtrlaydi.
-            if REQUIRE_CONFIRMATION:
-                prev = _pending.get(symbol)
-                if sig:
-                    if prev and prev["direction"] == sig["direction"]:
-                        # Tasdiqlandi — narx hali ham o'sha yo'nalishda ketmoqda
-                        confirmed = (
-                            (sig["direction"]=="BUY"  and sig["price"] >= prev["price"]) or
-                            (sig["direction"]=="SELL" and sig["price"] <= prev["price"])
-                        )
-                        del _pending[symbol]
-                        if not confirmed:
-                            sig = None  # narx orqaga ketdi — signal bekor
+            # ── Ikkala rejim uchun alohida tahlil: Intraday (15m) va Swing (4h) ──
+            for mode, period, interval in (("intraday","5d","15m"), ("swing","3mo","4h")):
+                pending_key = f"{symbol}_{mode}"
+                if not can_signal(pending_key, now): continue
+
+                df=get_price_data(symbol, period=period, interval=interval)
+                min_bars = 60 if mode=="intraday" else 55
+                if df is None or len(df)<min_bars: continue
+
+                ind=calc_ind(df)
+                pat=detect_patterns(df)
+                sr =calc_sr(df)
+                fib=calc_fib(df)
+                vol=calc_volume(df)
+                trend=calc_trendline(df)
+                smc  =calc_smc(df)
+                pd_zone=calc_premium_discount(df)
+                sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode)
+
+                # ── Confirmation bar mantiqi (har rejim uchun alohida) ──
+                if REQUIRE_CONFIRMATION:
+                    prev = _pending.get(pending_key)
+                    if sig:
+                        if prev and prev["direction"] == sig["direction"]:
+                            confirmed = (
+                                (sig["direction"]=="BUY"  and sig["price"] >= prev["price"]) or
+                                (sig["direction"]=="SELL" and sig["price"] <= prev["price"])
+                            )
+                            del _pending[pending_key]
+                            if not confirmed:
+                                sig = None
+                        else:
+                            _pending[pending_key] = {"direction": sig["direction"], "price": sig["price"]}
+                            sig = None
                     else:
-                        # Birinchi marta chiqdi — kutish ro'yxatiga qo'yamiz, hozircha yubormaymiz
-                        _pending[symbol] = {"direction": sig["direction"], "price": sig["price"]}
-                        sig = None
-                else:
-                    _pending.pop(symbol, None)
+                        _pending.pop(pending_key, None)
 
-            if sig:
-                reg_signal(symbol,now)
-                rem=MAX_DAILY_SIGNALS-_daily[symbol]["count"]
-                msg=fmt_signal(symbol,sig,nl,rem)
-                await bot.send_message(chat_id=CHAT_ID,text=msg,parse_mode="Markdown")
-                log.info(f"Signal: {symbol} {sig['direction']} score={sig['score']}")
+                if sig:
+                    candidate_signals.append((symbol, mode, sig, nl))
 
         except Exception as e:
             log.error(f"Xato ({symbol}): {e}")
+
+    # ── CORRELATION FILTRI (har rejim ichida alohida tekshiriladi) ──
+    # Bog'liq juftliklar bir xil rejimda qarama-qarshi yo'nalishda signal
+    # bersa — ikkalasi ham bekor qilinadi.
+    by_mode = {"intraday": {}, "swing": {}}
+    for symbol, mode, sig, nl in candidate_signals:
+        by_mode[mode][symbol] = (sig, nl)
+
+    rejected = set()
+    for mode in ("intraday", "swing"):
+        for a, b in CORRELATED_PAIRS:
+            if a in by_mode[mode] and b in by_mode[mode]:
+                if by_mode[mode][a][0]["direction"] == by_mode[mode][b][0]["direction"]:
+                    rejected.add((a, mode)); rejected.add((b, mode))
+                    log.info(f"Correlation filtri ({mode}): {a} va {b} bir xil yo'nalishda — rad etildi")
+
+    for symbol, mode, sig, nl in candidate_signals:
+        if (symbol, mode) in rejected: continue
+        pending_key = f"{symbol}_{mode}"
+        reg_signal(pending_key, now)
+        rem = MAX_DAILY_SIGNALS - _daily[pending_key]["count"]
+        msg = fmt_signal(symbol, sig, nl, rem)
+        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        log.info(f"Signal: {symbol} [{mode}] {sig['direction']} score={sig['score']}")
 
 # ══════════════════════════════════════════════
 #  TELEGRAM KOMANDALAR
 # ══════════════════════════════════════════════
 async def cmd_start(update,context):
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v5.0*\n\n"
+        "👋 *UltimateForexSignalBot v7.0 (ICT/SMC)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
         "  ₿  BTCUSD — Bitcoin (24/7)\n"
         "  💶 EURUSD — Euro/Dollar\n"
-        "  💷 GBPUSD — Funt/Dollar\n\n"
+        "  💷 GBPUSD — Funt/Dollar\n"
+        "  📈 SPX500 — S&P 500 indeksi\n\n"
+        "🧠 *Strategiya:* ICT / Smart Money Concepts\n"
+        "  • Imbalans (Fair Value Gap)\n"
+        "  • Order Blocks\n"
+        "  • BOS / CHoCH (Market Structure)\n"
+        "  • Premium/Discount zonalar\n"
+        "  • ICT Killzones\n"
+        "  • SNR (Support/Resistance)\n\n"
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n\n"
@@ -775,30 +954,47 @@ async def cmd_status(update,context):
     await update.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_signal(update,context):
-    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda (SMC + Trendline bilan)...")
+    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda (Intraday + Swing, ICT/SMC)...")
     sentiment=get_sentiment(); found=0
+    now=datetime.now(timezone.utc)
     for sym in SYMBOLS:
-        df=get_price_data(sym)
-        if df is None or len(df)<60: continue
-        ind=calc_ind(df); pat=detect_patterns(df)
-        sr=calc_sr(df); fib=calc_fib(df)
-        vol=calc_volume(df); htf=get_htf(sym)
-        trend=calc_trendline(df); smc=calc_smc(df)
-        sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc)
-        if sig:
-            found+=1
-            msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
-            msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal esa tasdiqlash uchun 1 bar kutadi._"
-            await update.message.reply_text(msg,parse_mode="Markdown")
+        htf=get_htf(sym)
+        killzone=get_ict_killzone(now)
+        for mode, period, interval in (("intraday","5d","15m"), ("swing","3mo","4h")):
+            df=get_price_data(sym, period=period, interval=interval)
+            min_bars = 60 if mode=="intraday" else 55
+            if df is None or len(df)<min_bars: continue
+            ind=calc_ind(df); pat=detect_patterns(df)
+            sr=calc_sr(df); fib=calc_fib(df)
+            vol=calc_volume(df)
+            trend=calc_trendline(df); smc=calc_smc(df)
+            pd_zone=calc_premium_discount(df)
+            sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode)
+            if sig:
+                found+=1
+                msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
+                msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal esa tasdiqlash uchun 1 bar kutadi._"
+                await update.message.reply_text(msg,parse_mode="Markdown")
     if not found:
-        await update.message.reply_text("⏸ Hozircha kuchli signal yo'q.")
+        await update.message.reply_text("⏸ Hozircha kuchli signal yo'q (na Intraday, na Swing).")
 
 async def cmd_news(update,context):
     now=datetime.now(timezone.utc).replace(tzinfo=None)
-    msg="📰 *Yaqin yangiliklar:*\n━━━━━━━━━━━━━━━━\n"
+    msg="📰 *Yaqin yangiliklar (Finnhub):*\n━━━━━━━━━━━━━━━━\n"
     found=False
-    for n in NEWS_CALENDAR:
-        nt=datetime.strptime(n["date"],"%Y-%m-%d %H:%M")
+    events = fetch_news_calendar()
+    if not events and not FINNHUB_API_KEY:
+        await update.message.reply_text(
+            "⚠️ FINNHUB_API_KEY sozlanmagan. finnhub.io dan bepul kalit oling "
+            "va Render'da Environment Variables'ga qo'shing.",
+            parse_mode="Markdown"
+        )
+        return
+    for n in events:
+        try:
+            nt=datetime.strptime(n["date"],"%Y-%m-%d %H:%M")
+        except ValueError:
+            continue
         diff=(nt-now).total_seconds()/60
         if 0<=diff<=1440:
             e={3:"🔴",2:"🟡",1:"⚪"}.get(n["impact"],"⚪")
@@ -894,7 +1090,7 @@ def main():
                    ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v5.0 ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v7.0 (ICT/SMC) ishga tushdi!")
     app.run_polling()
 
 if __name__=="__main__":
