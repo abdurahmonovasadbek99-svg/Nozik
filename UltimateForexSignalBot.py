@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v7.0 (ICT/SMC) — Telegram Signal Bot
+UltimateForexSignalBot v8.0 (Top-Down ICT) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, BTCUSD, EURUSD, GBPUSD, SPX500
 
@@ -75,7 +75,7 @@ MAX_DAILY_SIGNALS     = 6    # har juftlik + har rejim uchun (Intraday va Swing 
 TRADING_START         = 7    # UTC (forex/metal uchun)
 TRADING_END           = 21   # UTC (forex/metal uchun)
 EOD_REMINDER_HOUR     = 20   # UTC
-MIN_SCORE             = 6    # Minimal ball
+MIN_SCORE             = 9    # Minimal ball (avval 6 edi — qattiqroq filtr uchun oshirildi)
 REQUIRE_CONFIRMATION  = True # Signal chiqqach 1 bar tasdiqlashini kutish
 
 # ══════════════════════════════════════════════
@@ -511,6 +511,7 @@ def calc_ind(df: pd.DataFrame) -> dict:
 #  HTF TREND (4 soatlik)
 # ══════════════════════════════════════════════
 def get_htf(symbol: str) -> str | None:
+    """Katta rasm — 4H trend (Swing va Intraday uchun umumiy yo'nalish tasdiqlash)"""
     try:
         df=get_price_data(symbol,"1mo","4h")
         if df is None or len(df)<55: return None
@@ -521,6 +522,27 @@ def get_htf(symbol: str) -> str | None:
         if e20.iloc[-1]<e50.iloc[-1]: return "DOWN"
     except: pass
     return None
+
+def get_scalp_confirmation(symbol: str, direction: str) -> bool:
+    """
+    Top-Down Analysis'ning oxirgi qadami — 5 daqiqalik grafikda kirish
+    momenti signal yo'nalishi bilan mos kelishini tasdiqlaydi.
+    1H/4H "biror joyda BUY kerak" desa ham, 5m'da narx hozircha teskari
+    ketayotgan bo'lsa — bu yaxshi kirish nuqtasi emas, signal kechiktiriladi.
+    """
+    try:
+        df = get_price_data(symbol, "1d", "5m")
+        if df is None or len(df) < 20:
+            return True  # ma'lumot yo'q bo'lsa, filtrlamaymiz
+        c = df["close"]
+        e5  = ta.trend.EMAIndicator(c, 5).ema_indicator()
+        e13 = ta.trend.EMAIndicator(c, 13).ema_indicator()
+        if direction == "BUY":
+            return e5.iloc[-1] >= e13.iloc[-1]
+        else:
+            return e5.iloc[-1] <= e13.iloc[-1]
+    except Exception:
+        return True
 
 # ══════════════════════════════════════════════
 #  SIGNAL GENERATSIYA
@@ -597,13 +619,25 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
     elif sentiment["greed"]:       S+=1; R.append(f"😏 Greed ({fg})")
     else:                          R.append(f"😐 Neytral ({fg})")
 
-    # 12. HTF
-    if htf=="UP":
-        S=int(S*0.5)
-        if B>0: R.append("✅ 4H trend: yuqori (BUY mos)")
-    elif htf=="DOWN":
-        B=int(B*0.5)
-        if S>0: R.append("✅ 4H trend: pastga (SELL mos)")
+    # 12. HTF (Top-Down Analysis) — Intraday uchun QATTIQ filtr, Swing uchun yumshoq
+    if mode == "intraday":
+        # Intraday'da 1H/4H trendga zid signal UMUMAN qabul qilinmaydi —
+        # bu "shovqinga qarshi savdo qilish" xatosining oldini oladi.
+        if htf=="UP" and S>B:
+            R.append("⛔ 4H trend yuqoriga, lekin SELL signal — Top-Down filtri rad etdi")
+            return None
+        if htf=="DOWN" and B>S:
+            R.append("⛔ 4H trend pastga, lekin BUY signal — Top-Down filtri rad etdi")
+            return None
+        if htf=="UP": R.append("✅ 4H trend: yuqoriga (Top-Down tasdiqlandi)")
+        elif htf=="DOWN": R.append("✅ 4H trend: pastga (Top-Down tasdiqlandi)")
+    else:
+        if htf=="UP":
+            S=int(S*0.5)
+            if B>0: R.append("✅ 4H trend: yuqori (BUY mos)")
+        elif htf=="DOWN":
+            B=int(B*0.5)
+            if S>0: R.append("✅ 4H trend: pastga (SELL mos)")
 
     # 13. Trendline breakout (klassik texnik tahlil)
     if trend.get("uptrend_break"):
@@ -842,7 +876,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             killzone=get_ict_killzone(now)
 
             # ── Ikkala rejim uchun alohida tahlil: Intraday (15m) va Swing (4h) ──
-            for mode, period, interval in (("intraday","5d","15m"), ("swing","3mo","4h")):
+            for mode, period, interval in (("intraday","1mo","1h"), ("swing","3mo","4h")):
                 pending_key = f"{symbol}_{mode}"
                 if not can_signal(pending_key, now): continue
 
@@ -860,23 +894,46 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                 pd_zone=calc_premium_discount(df)
                 sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode)
 
-                # ── Confirmation bar mantiqi (har rejim uchun alohida) ──
+                # ── Confirmation mantiqi (har rejim uchun alohida) ──
+                # Intraday uchun 2 marta ketma-ket bir xil yo'nalishda signal
+                # kelishi kerak (shovqinni filtrlash uchun), Swing uchun 1 bar yetarli.
+                required_confirmations = 2 if mode == "intraday" else 1
                 if REQUIRE_CONFIRMATION:
                     prev = _pending.get(pending_key)
                     if sig:
                         if prev and prev["direction"] == sig["direction"]:
-                            confirmed = (
+                            still_valid = (
                                 (sig["direction"]=="BUY"  and sig["price"] >= prev["price"]) or
                                 (sig["direction"]=="SELL" and sig["price"] <= prev["price"])
                             )
-                            del _pending[pending_key]
-                            if not confirmed:
+                            if not still_valid:
+                                del _pending[pending_key]
+                                sig = None
+                            elif prev["count"] + 1 >= required_confirmations:
+                                del _pending[pending_key]
+                                # sig tayyor — yuboriladi
+                            else:
+                                _pending[pending_key] = {"direction": sig["direction"],
+                                                          "price": sig["price"],
+                                                          "count": prev["count"] + 1}
                                 sig = None
                         else:
-                            _pending[pending_key] = {"direction": sig["direction"], "price": sig["price"]}
-                            sig = None
+                            _pending[pending_key] = {"direction": sig["direction"],
+                                                      "price": sig["price"], "count": 1}
+                            sig = None if required_confirmations > 1 else sig
+                            if sig:
+                                _pending.pop(pending_key, None)
                     else:
                         _pending.pop(pending_key, None)
+
+                # ── 5m Scalp Confirmation (Top-Down'ning oxirgi qadami) ──
+                # Faqat Intraday uchun: 1H/4H "bias" tasdiqlangan bo'lsa ham,
+                # 5m grafikda narx hozircha teskari harakatlanayotgan bo'lsa —
+                # bu yomon kirish nuqtasi, signal shu safar o'tkazib yuboriladi.
+                if sig and mode == "intraday":
+                    if not get_scalp_confirmation(symbol, sig["direction"]):
+                        sig["reasons"].append("⏸ 5m entry hali tasdiqlanmadi — kutilmoqda")
+                        sig = None
 
                 if sig:
                     candidate_signals.append((symbol, mode, sig, nl))
@@ -913,7 +970,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════
 async def cmd_start(update,context):
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v7.0 (ICT/SMC)*\n\n"
+        "👋 *UltimateForexSignalBot v8.0 (Top-Down ICT)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -960,7 +1017,7 @@ async def cmd_signal(update,context):
     for sym in SYMBOLS:
         htf=get_htf(sym)
         killzone=get_ict_killzone(now)
-        for mode, period, interval in (("intraday","5d","15m"), ("swing","3mo","4h")):
+        for mode, period, interval in (("intraday","1mo","1h"), ("swing","3mo","4h")):
             df=get_price_data(sym, period=period, interval=interval)
             min_bars = 60 if mode=="intraday" else 55
             if df is None or len(df)<min_bars: continue
@@ -973,7 +1030,7 @@ async def cmd_signal(update,context):
             if sig:
                 found+=1
                 msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
-                msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal esa tasdiqlash uchun 1 bar kutadi._"
+                msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija (5m scalp tasdiqisiz). Avtomatik signal Top-Down tahlil bilan keladi._"
                 await update.message.reply_text(msg,parse_mode="Markdown")
     if not found:
         await update.message.reply_text("⏸ Hozircha kuchli signal yo'q (na Intraday, na Swing).")
@@ -1090,7 +1147,7 @@ def main():
                    ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v7.0 (ICT/SMC) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v8.0 (Top-Down ICT) ishga tushdi!")
     app.run_polling()
 
 if __name__=="__main__":
