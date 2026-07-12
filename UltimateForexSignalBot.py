@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v8.0 (Top-Down ICT) — Telegram Signal Bot
+UltimateForexSignalBot v9.0 (Auto-Stable) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, BTCUSD, EURUSD, GBPUSD, SPX500
 
@@ -813,6 +813,7 @@ _sent_news   = set()
 _daily       = {}
 _eod_sent    = set()
 _pending     = {}   # {symbol: {"direction": "BUY", "score": 8, "price": ...}} — tasdiq kutayotgan signal
+_sent_signal_msgs = []  # [{"chat_id":..., "message_id":..., "expire_at":...}] — avtomatik o'chirish uchun
 
 def is_session(symbol: str, now: datetime) -> bool:
     """Bitcoin 24/7; SPX500 AQSh birja sessiyasida; qolganlar forex sessiyasida"""
@@ -962,15 +963,38 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
         reg_signal(pending_key, now)
         rem = MAX_DAILY_SIGNALS - _daily[pending_key]["count"]
         msg = fmt_signal(symbol, sig, nl, rem)
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        sent = await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        # Muddati o'tganda avtomatik o'chirish uchun ro'yxatga qo'shamiz.
+        # Intraday tezroq eskiradi (1 soat), Swing sekinroq (6 soat).
+        expire_hours = 1 if mode == "intraday" else 6
+        _sent_signal_msgs.append({
+            "chat_id": CHAT_ID, "message_id": sent.message_id,
+            "expire_at": now + pd.Timedelta(hours=expire_hours),
+        })
         log.info(f"Signal: {symbol} [{mode}] {sig['direction']} score={sig['score']}")
+
+    # ── Muddati o'tgan signal xabarlarini o'chirish ──
+    still_pending = []
+    for item in _sent_signal_msgs:
+        if now >= item["expire_at"]:
+            try:
+                await bot.delete_message(chat_id=item["chat_id"], message_id=item["message_id"])
+            except Exception:
+                pass  # Xabar allaqachon o'chirilgan yoki 48 soatdan eski bo'lishi mumkin
+        else:
+            still_pending.append(item)
+    _sent_signal_msgs[:] = still_pending
 
 # ══════════════════════════════════════════════
 #  TELEGRAM KOMANDALAR
 # ══════════════════════════════════════════════
 async def cmd_start(update,context):
+    try:
+        await _set_bot_commands(context.application)
+    except Exception as e:
+        log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v8.0 (Top-Down ICT)*\n\n"
+        "👋 *UltimateForexSignalBot v9.0 (Auto-Stable)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -987,7 +1011,8 @@ async def cmd_start(update,context):
         "  • SNR (Support/Resistance)\n\n"
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
-        f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n\n"
+        f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
+        f"🧹 Eskirgan signallar avtomatik o'chiriladi (Intraday: 1s, Swing: 6s)\n\n"
         "📋 *Komandalar:*\n"
         "/signal — Hozirgi signallar\n"
         "/status — Joriy narxlar\n"
@@ -1141,16 +1166,26 @@ async def _set_bot_commands(app):
     log.info("✅ Bot komandalar menyusi o'rnatildi")
 
 def main():
-    app=Application.builder().token(BOT_TOKEN).post_init(_set_bot_commands).build()
+    app=Application.builder().token(BOT_TOKEN).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),
                    ("signal",cmd_signal),("news",cmd_news),
                    ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v8.0 (Top-Down ICT) ishga tushdi!")
-    app.run_polling()
+    log.info(f"UltimateForexSignalBot v9.0 (Auto-Stable) ishga tushdi!")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
     # PORT'ni HAMMA narsadan oldin, darhol ochamiz — Render buni tez ko'rishi kerak
     threading.Thread(target=start_fake_server, daemon=True).start()
-    main()
+
+    # ── BARQARORLIK: agar bot kutilmagan xato bilan yiqilsa, avtomatik
+    # qayta ishga tushiriladi (cheksiz urinish, orada kichik pauza bilan) ──
+    while True:
+        try:
+            main()
+        except Exception as e:
+            log.error(f"⚠️ Bot kutilmagan xato bilan to'xtadi: {e}")
+            log.info("🔄 10 soniyadan keyin avtomatik qayta ishga tushadi...")
+            import time
+            time.sleep(10)
