@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v9.0 (Auto-Stable) — Telegram Signal Bot
+UltimateForexSignalBot v11.0 (Win-Rate + News Blackout) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
@@ -250,6 +250,132 @@ def calc_volume(df: pd.DataFrame) -> dict:
     cur = df["volume"].iloc[-1]
     r   = cur / avg if avg > 0 else 1.0
     return {"ratio": round(r,2), "high": r > 1.5, "low": r < 0.5}
+
+# ══════════════════════════════════════════════
+#  VWAP (Volume Weighted Average Price)
+# ══════════════════════════════════════════════
+def calc_vwap(df: pd.DataFrame) -> dict:
+    """
+    VWAP — institutsional treyderlarning asosiy referens narxi.
+    Narx VWAP'dan yuqorida = kunlik bosim BUY tomonda (aksincha SELL).
+    Forex'da haqiqiy tick-volume yo'q bo'lgani uchun (H+L+C)/3 * volume
+    proksisi ishlatiladi — bu yetarlicha ishonchli taxmin beradi.
+    """
+    try:
+        typical = (df["high"] + df["low"] + df["close"]) / 3
+        vol = df["volume"].replace(0, 1)  # nol volume bo'lsa 1 deb olamiz
+        cum_vol = vol.cumsum()
+        cum_tp_vol = (typical * vol).cumsum()
+        vwap = (cum_tp_vol / cum_vol).iloc[-1]
+        price = df["close"].iloc[-1]
+        return {
+            "vwap": round(vwap, 5),
+            "above": price > vwap,
+            "below": price < vwap,
+            "distance_pct": round(abs(price - vwap) / price * 100, 3) if price else 0,
+        }
+    except Exception:
+        return {"vwap": None, "above": False, "below": False, "distance_pct": 0}
+
+# ══════════════════════════════════════════════
+#  OPENING RANGE BREAKOUT (ORB)
+# ══════════════════════════════════════════════
+def calc_orb(df: pd.DataFrame, now: datetime, session_start_hour: int) -> dict:
+    """
+    London/NY ochilishidan keyingi birinchi 30 daqiqalik range hisoblanadi.
+    Bu range'dan tashqariga chiqish (breakout) statistik jihatdan kuchli
+    davom etish signali beradi — professional scalperlar orasida eng
+    ko'p ishlatiladigan usullardan biri.
+    """
+    try:
+        session_open = now.replace(hour=session_start_hour, minute=0, second=0, microsecond=0)
+        if now < session_open:
+            session_open -= pd.Timedelta(days=1)
+        window_end = session_open + pd.Timedelta(minutes=30)
+
+        df_local = df.copy()
+        df_local["time"] = pd.to_datetime(df_local["time"]).dt.tz_localize(None)
+        mask = (df_local["time"] >= session_open.replace(tzinfo=None)) & \
+               (df_local["time"] <= window_end.replace(tzinfo=None))
+        orb_bars = df_local[mask]
+
+        if len(orb_bars) < 2:
+            return {"available": False}
+
+        orb_high = orb_bars["high"].max()
+        orb_low  = orb_bars["low"].min()
+        price = df["close"].iloc[-1]
+
+        return {
+            "available": True,
+            "orb_high": round(orb_high, 5),
+            "orb_low": round(orb_low, 5),
+            "breakout_up": price > orb_high,
+            "breakout_down": price < orb_low,
+        }
+    except Exception:
+        return {"available": False}
+
+# ══════════════════════════════════════════════
+#  MOMENTUM CANDLE + RETEST
+# ══════════════════════════════════════════════
+def calc_momentum_retest(df: pd.DataFrame) -> dict:
+    """
+    Kuchli (ATR'dan katta) sham paydo bo'lgach, narx o'sha shamning
+    tanasiga (body) qaytib kelib "retest" qilishi — professional
+    scalperlarning eng ko'p ishlatadigan kirish texnikalaridan biri.
+    Retest darajasidan qayta sakrash kuchli davom etish signali beradi.
+    """
+    try:
+        o, h, l, c = df["open"].values, df["high"].values, df["low"].values, df["close"].values
+        atr = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"], 14).average_true_range().iloc[-1]
+        if len(c) < 5 or atr <= 0:
+            return {"bullish_retest": False, "bearish_retest": False}
+
+        # Oxirgi 5 barda ATR'dan 1.5x katta sham qidiramiz
+        for i in range(len(c) - 5, len(c) - 1):
+            body = abs(c[i] - o[i])
+            if body < atr * 1.5:
+                continue
+            is_bull_momentum = c[i] > o[i]
+            momentum_level = c[i] if is_bull_momentum else o[i]  # sham yopilish/ochilish darajasi
+            price = c[-1]
+            near_level = abs(price - momentum_level) < atr * 0.3
+
+            if is_bull_momentum and near_level and price > l[-1]:
+                return {"bullish_retest": True, "bearish_retest": False, "level": round(momentum_level, 5)}
+            if not is_bull_momentum and near_level and price < h[-1]:
+                return {"bullish_retest": False, "bearish_retest": True, "level": round(momentum_level, 5)}
+
+        return {"bullish_retest": False, "bearish_retest": False}
+    except Exception:
+        return {"bullish_retest": False, "bearish_retest": False}
+
+# ══════════════════════════════════════════════
+#  ROUND NUMBER MAGNETISM
+# ══════════════════════════════════════════════
+def calc_round_number(price: float, symbol: str) -> dict:
+    """
+    Narx psixologik butun raqamlarga (masalan 1.1000, 2400.00) tortiladi
+    va ko'pincha shu darajalarda to'xtaydi yoki qaytadi — bank/institutsional
+    order'lar odatda shu "aylanma" raqamlarga qo'yiladi.
+    """
+    # Juftlik turiga qarab "dumaloq" daraja qadamini aniqlaymiz
+    if symbol in ("XAUUSD", "XAGUSD"):
+        step = 10.0 if symbol == "XAUUSD" else 0.5
+    elif "JPY" in symbol:
+        step = 0.5
+    else:
+        step = 0.0050  # forex uchun 50 pip
+
+    nearest = round(price / step) * step
+    distance = abs(price - nearest)
+    close_enough = distance < step * 0.15
+
+    return {
+        "near_round": close_enough,
+        "level": round(nearest, 5),
+    }
 
 # ══════════════════════════════════════════════
 #  SENTIMENT (Fear & Greed)
@@ -527,36 +653,56 @@ def get_htf(symbol: str) -> str | None:
     except: pass
     return None
 
-def get_scalp_confirmation(symbol: str, direction: str) -> bool:
-    """
-    Top-Down Analysis'ning oxirgi qadami — 5 daqiqalik grafikda kirish
-    momenti signal yo'nalishi bilan mos kelishini tasdiqlaydi.
-    1H/4H "biror joyda BUY kerak" desa ham, 5m'da narx hozircha teskari
-    ketayotgan bo'lsa — bu yaxshi kirish nuqtasi emas, signal kechiktiriladi.
-    """
+def get_tf_bias(symbol: str, period: str, interval: str) -> str | None:
+    """Bitta timeframe uchun tez EMA(5/13) asosida yo'nalishni aniqlaydi"""
     try:
-        df = get_price_data(symbol, "1d", "5m")
+        df = get_price_data(symbol, period, interval)
         if df is None or len(df) < 20:
-            return True  # ma'lumot yo'q bo'lsa, filtrlamaymiz
+            return None
         c = df["close"]
         e5  = ta.trend.EMAIndicator(c, 5).ema_indicator()
         e13 = ta.trend.EMAIndicator(c, 13).ema_indicator()
-        if direction == "BUY":
-            return e5.iloc[-1] >= e13.iloc[-1]
-        else:
-            return e5.iloc[-1] <= e13.iloc[-1]
+        if e5.iloc[-1] > e13.iloc[-1]: return "BUY"
+        if e5.iloc[-1] < e13.iloc[-1]: return "SELL"
+        return None
     except Exception:
-        return True
+        return None
+
+def get_scalp_confluence(symbol: str, direction: str) -> dict:
+    """
+    Scalping uchun Multi-Timeframe Confluence — 5m, 15m va 1H bir vaqtda
+    tekshiriladi. Signal faqat KAMIDA 2 ta timeframe mos kelsagina
+    "tasdiqlangan" hisoblanadi (barchasi shart emas, lekin ko'pchilik).
+    Bu eng aniq, shovqindan tozalangan kirish nuqtasini beradi.
+    """
+    tf_5m  = get_tf_bias(symbol, "1d", "5m")
+    tf_15m = get_tf_bias(symbol, "5d", "15m")
+    tf_1h  = get_tf_bias(symbol, "1mo", "1h")
+
+    biases = [tf_5m, tf_15m, tf_1h]
+    matching = sum(1 for b in biases if b == direction)
+    total_known = sum(1 for b in biases if b is not None)
+
+    return {
+        "confirmed": matching >= 2,          # kamida 2/3 timeframe mos
+        "matching": matching,
+        "total": total_known,
+        "detail": f"5m:{tf_5m or '–'} 15m:{tf_15m or '–'} 1H:{tf_1h or '–'}",
+    }
 
 # ══════════════════════════════════════════════
 #  SIGNAL GENERATSIYA
 # ══════════════════════════════════════════════
-def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,pd_zone=None,killzone=None,mode="intraday") -> dict | None:
+def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,pd_zone=None,killzone=None,mode="intraday",vwap=None,orb=None,mom_retest=None,round_num=None) -> dict | None:
     B=0; S=0; R=[]
     p=ind["price"]; atr=ind["atr"]; adx=ind["adx"]
     trend  = trend or {}
     smc    = smc or {}
     pd_zone= pd_zone or {}
+    vwap   = vwap or {}
+    orb    = orb or {}
+    mom_retest = mom_retest or {}
+    round_num  = round_num or {}
 
     # 1. EMA (umumiy trend yo'nalishi)
     if ind["e10_1"]<ind["e50_1"] and ind["e10"]>ind["e50"]: B+=2; R.append("📈 EMA kesishdi (yuqori)")
@@ -677,6 +823,30 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
         R.append(f"💧 Yuqori likvidlik zonasi yaqinda: {smc['liquidity_high']} (stop-hunt xavfi)")
     if smc.get("liquidity_low") and p - atr*2 < smc["liquidity_low"] < p:
         R.append(f"💧 Past likvidlik zonasi yaqinda: {smc['liquidity_low']} (stop-hunt xavfi)")
+
+    # ── VWAP (institutsional referens narx) ──
+    if vwap.get("vwap"):
+        if vwap["above"]:
+            B+=1; R.append(f"📊 VWAP ustida: {vwap['vwap']} (bosim BUY tomonda)")
+        elif vwap["below"]:
+            S+=1; R.append(f"📊 VWAP ostida: {vwap['vwap']} (bosim SELL tomonda)")
+
+    # ── Opening Range Breakout (ORB) ──
+    if orb.get("available"):
+        if orb["breakout_up"]:
+            B+=2; R.append(f"🚀 ORB breakout yuqoriga: {orb['orb_high']}")
+        elif orb["breakout_down"]:
+            S+=2; R.append(f"🚀 ORB breakout pastga: {orb['orb_low']}")
+
+    # ── Momentum Candle + Retest ──
+    if mom_retest.get("bullish_retest"):
+        B+=2; R.append(f"⚡ Momentum retest (bullish): {mom_retest.get('level')}")
+    if mom_retest.get("bearish_retest"):
+        S+=2; R.append(f"⚡ Momentum retest (bearish): {mom_retest.get('level')}")
+
+    # ── Round Number Magnetism ──
+    if round_num.get("near_round"):
+        R.append(f"🎯 Dumaloq raqam yaqinida: {round_num['level']} (kutilmagan qaytish xavfi)")
 
     # Natija
     direction=None; score=0
@@ -820,6 +990,13 @@ _eod_sent    = set()
 _pending     = {}   # {symbol: {"direction": "BUY", "score": 8, "price": ...}} — tasdiq kutayotgan signal
 _sent_signal_msgs = []  # [{"chat_id":..., "message_id":..., "expire_at":...}] — avtomatik o'chirish uchun
 
+# ── WIN-RATE TRACKING ──
+# Har yuborilgan signal shu ro'yxatga qo'shiladi va keyingi tekshiruvlarda
+# narx TP1/TP2 yoki SL ga yetganmi kuzatiladi. Bu orqali botning HAQIQIY
+# aniqligini (taxmin emas, real natija) hisoblab boramiz.
+_tracked_signals = []  # [{"symbol","mode","direction","entry","sl","tp1","tp2","opened_at","status"}]
+_stats = {"total": 0, "tp1_hit": 0, "tp2_hit": 0, "sl_hit": 0, "open": 0}
+
 def is_session(symbol: str, now: datetime) -> bool:
     """Barcha juftliklar forex sessiyasida ishlaydi"""
     if symbol in CRYPTO_SYMBOLS:
@@ -846,10 +1023,56 @@ def reg_signal(symbol,now):
 # shuning uchun ziddiyat bo'lsa ikkalasi ham ehtiyot yuzasidan filtrlanadi.
 CORRELATED_PAIRS = [("EURUSD", "GBPUSD")]
 
+async def update_signal_tracking(bot):
+    """
+    Ochiq (kuzatilayotgan) signallarning joriy narxini tekshiradi va
+    TP1/TP2/SL ga yetganini aniqlaydi. Natija _stats ga yoziladi —
+    bu botning HAQIQIY win-rate'ini beradi (taxmin emas).
+    """
+    price_cache = {}
+    for sig in _tracked_signals:
+        if sig["status"] != "open":
+            continue
+        symbol = sig["symbol"]
+        if symbol not in price_cache:
+            df = get_price_data(symbol, "1d", "5m")
+            price_cache[symbol] = df["close"].iloc[-1] if df is not None and len(df) > 0 else None
+        price = price_cache[symbol]
+        if price is None:
+            continue
+
+        d = sig["direction"]
+        hit_tp2 = (d == "BUY" and price >= sig["tp2"]) or (d == "SELL" and price <= sig["tp2"])
+        hit_tp1 = (d == "BUY" and price >= sig["tp1"]) or (d == "SELL" and price <= sig["tp1"])
+        hit_sl  = (d == "BUY" and price <= sig["sl"])  or (d == "SELL" and price >= sig["sl"])
+
+        if hit_tp2:
+            sig["status"] = "tp2_hit"
+            _stats["tp2_hit"] += 1; _stats["open"] -= 1
+            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
+                text=f"🎯🎯 *{symbol} [{sig['mode']}] — TP2 GA YETDI!* Signal to'liq yopildi.")
+        elif hit_tp1:
+            sig["status"] = "tp1_hit"
+            _stats["tp1_hit"] += 1; _stats["open"] -= 1
+            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
+                text=f"🎯 *{symbol} [{sig['mode']}] — TP1 ga yetdi!* Foyda qayd etildi.")
+        elif hit_sl:
+            sig["status"] = "sl_hit"
+            _stats["sl_hit"] += 1; _stats["open"] -= 1
+            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
+                text=f"🛑 *{symbol} [{sig['mode']}] — SL ga yetdi.* Zarar qayd etildi.")
+
+    # Xotira tejash uchun 500 tadan ortiq bo'lsa eski yopiq signallarni tozalaymiz
+    if len(_tracked_signals) > 500:
+        _tracked_signals[:] = [s for s in _tracked_signals if s["status"] == "open"][-300:]
+
 async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
     bot=context.bot
     now=datetime.now(timezone.utc)
     today=now.strftime("%Y-%m-%d")
+
+    # Ochiq signallarni tekshirish (win-rate tracking)
+    await update_signal_tracking(bot)
 
     # EOD eslatmasi
     if now.hour==EOD_REMINDER_HOUR and now.minute<CHECK_INTERVAL and today not in _eod_sent:
@@ -878,6 +1101,19 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                         await bot.send_message(chat_id=CHAT_ID,parse_mode="Markdown",
                                                text=fmt_news_alert(n,symbol))
 
+            # ── NEWS BLACKOUT ──
+            # Yuqori ta'sirli (impact=3) yangilikdan 30 daqiqa oldin va
+            # 15 daqiqa keyin — signal generatsiyasi TO'LIQ to'xtatiladi.
+            # Bu paytda narx harakati texnik tahlilga bo'ysunmaydi (spread
+            # kengayadi, spike'lar bo'ladi), shuning uchun har qanday
+            # signal ishonchsiz bo'ladi.
+            in_blackout = any(
+                n["impact"] == 3 and -15 <= n["diff_min"] <= 30
+                for n in nl
+            )
+            if in_blackout:
+                continue
+
             htf=get_htf(symbol)
             killzone=get_ict_killzone(now)
 
@@ -898,7 +1134,12 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                 trend=calc_trendline(df)
                 smc  =calc_smc(df)
                 pd_zone=calc_premium_discount(df)
-                sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode)
+                vwap_data = calc_vwap(df)
+                orb_data  = calc_orb(df, now, TRADING_START)
+                mom_retest = calc_momentum_retest(df)
+                round_num  = calc_round_number(ind["price"], symbol)
+                sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode,
+                                     vwap_data,orb_data,mom_retest,round_num)
 
                 # ── Confirmation mantiqi (har rejim uchun alohida) ──
                 # Intraday uchun 2 marta ketma-ket bir xil yo'nalishda signal
@@ -932,14 +1173,21 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                     else:
                         _pending.pop(pending_key, None)
 
-                # ── 5m Scalp Confirmation (Top-Down'ning oxirgi qadami) ──
-                # Faqat Intraday uchun: 1H/4H "bias" tasdiqlangan bo'lsa ham,
-                # 5m grafikda narx hozircha teskari harakatlanayotgan bo'lsa —
-                # bu yomon kirish nuqtasi, signal shu safar o'tkazib yuboriladi.
-                if sig and mode == "intraday":
-                    if not get_scalp_confirmation(symbol, sig["direction"]):
-                        sig["reasons"].append("⏸ 5m entry hali tasdiqlanmadi — kutilmoqda")
+                # ── Scalping: Multi-Timeframe Confluence (5m+15m+1H) ──
+                # Ikkala rejim uchun ham qo'llaniladi: signal faqat kamida
+                # 2/3 timeframe bir xil yo'nalishni ko'rsatsagina o'tadi.
+                # Bu shovqinni maksimal darajada filtrlaydi va eng aniq
+                # kirish nuqtasini beradi.
+                if sig:
+                    conf = get_scalp_confluence(symbol, sig["direction"])
+                    if not conf["confirmed"]:
+                        sig["reasons"].append(
+                            f"⏸ Multi-TF confluence yetarli emas "
+                            f"({conf['matching']}/{conf['total']}) — {conf['detail']}"
+                        )
                         sig = None
+                    else:
+                        sig["reasons"].append(f"✅ Multi-TF confluence: {conf['detail']}")
 
                 if sig:
                     candidate_signals.append((symbol, mode, sig, nl))
@@ -976,6 +1224,14 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             "chat_id": CHAT_ID, "message_id": sent.message_id,
             "expire_at": now + pd.Timedelta(hours=expire_hours),
         })
+        # ── Win-rate kuzatuviga qo'shish ──
+        _tracked_signals.append({
+            "symbol": symbol, "mode": mode, "direction": sig["direction"],
+            "entry": sig["price"], "sl": sig["sl"], "tp1": sig["tp1"], "tp2": sig["tp2"],
+            "opened_at": now, "status": "open",
+        })
+        _stats["total"] += 1
+        _stats["open"] += 1
         log.info(f"Signal: {symbol} [{mode}] {sig['direction']} score={sig['score']}")
 
     # ── Muddati o'tgan signal xabarlarini o'chirish ──
@@ -999,7 +1255,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v9.0 (Auto-Stable)*\n\n"
+        "👋 *UltimateForexSignalBot v11.0 (Win-Rate + News Blackout)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -1020,6 +1276,7 @@ async def cmd_start(update,context):
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
+        f"🎯 Scalping: 5m+15m+1H Multi-Timeframe Confluence\n"
         f"🧹 Eskirgan signallar avtomatik o'chiriladi (Intraday: 1s, Swing: 6s)\n\n"
         "📋 *Komandalar:*\n"
         "/signal — Hozirgi signallar\n"
@@ -1027,7 +1284,8 @@ async def cmd_start(update,context):
         "/news — Yangiliklar\n"
         "/sentiment — Bozor kayfiyati\n"
         "/sr XAUUSD — Support/Resistance\n"
-        "/fib XAUUSD — Fibonacci\n",
+        "/fib XAUUSD — Fibonacci\n"
+        "/stats — Haqiqiy win-rate statistikasi\n",
         parse_mode="Markdown"
     )
 
@@ -1044,7 +1302,7 @@ async def cmd_status(update,context):
     await update.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_signal(update,context):
-    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda (Intraday + Swing, ICT/SMC)...")
+    await update.message.reply_text("⏳ Barcha aktivlar tahlil qilinmoqda (Scalping Multi-TF Confluence bilan)...")
     sentiment=get_sentiment(); found=0
     now=datetime.now(timezone.utc)
     for sym in SYMBOLS:
@@ -1059,11 +1317,23 @@ async def cmd_signal(update,context):
             vol=calc_volume(df)
             trend=calc_trendline(df); smc=calc_smc(df)
             pd_zone=calc_premium_discount(df)
-            sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode)
+            vwap_data = calc_vwap(df)
+            orb_data  = calc_orb(df, now, TRADING_START)
+            mom_retest = calc_momentum_retest(df)
+            round_num  = calc_round_number(ind["price"], sym)
+            sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode,
+                                 vwap_data,orb_data,mom_retest,round_num)
             if sig:
+                conf = get_scalp_confluence(sym, sig["direction"])
+                sig["reasons"].append(
+                    ("✅" if conf["confirmed"] else "⏸") +
+                    f" Multi-TF confluence: {conf['detail']}"
+                )
+                if not conf["confirmed"]:
+                    continue  # tasdiqlanmagan signalni /signal'da ham ko'rsatmaymiz
                 found+=1
                 msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
-                msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija (5m scalp tasdiqisiz). Avtomatik signal Top-Down tahlil bilan keladi._"
+                msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal qo'shimcha confirmation bar bilan keladi._"
                 await update.message.reply_text(msg,parse_mode="Markdown")
     if not found:
         await update.message.reply_text("⏸ Hozircha kuchli signal yo'q (na Intraday, na Swing).")
@@ -1134,6 +1404,40 @@ async def cmd_fib(update,context):
         msg+=f"  *{k}*: `{v}`{arrow}\n"
     await update.message.reply_text(msg,parse_mode="Markdown")
 
+async def cmd_stats(update,context):
+    """Botning HAQIQIY natijalarini ko'rsatadi — taxmin emas, kuzatilgan real natija"""
+    s = _stats
+    closed = s["tp1_hit"] + s["tp2_hit"] + s["sl_hit"]
+    if closed == 0:
+        await update.message.reply_text(
+            "📊 *Statistika*\n━━━━━━━━━━━━━━━━\n"
+            f"Jami yuborilgan signal: `{s['total']}`\n"
+            f"Ochiq (kuzatilmoqda): `{s['open']}`\n\n"
+            "⏳ Hali yopilgan (TP/SL ga yetgan) signal yo'q. "
+            "Statistika signallar yopilgach to'planadi.",
+            parse_mode="Markdown"
+        )
+        return
+
+    win_rate = round((s["tp1_hit"] + s["tp2_hit"]) / closed * 100, 1)
+    msg = (
+        f"📊 *Botning Haqiqiy Statistikasi*\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"📨 Jami yuborilgan: `{s['total']}`\n"
+        f"🔓 Hozir ochiq: `{s['open']}`\n"
+        f"🔒 Yopilgan: `{closed}`\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"🎯 TP1 ga yetdi: `{s['tp1_hit']}`\n"
+        f"🎯🎯 TP2 ga yetdi: `{s['tp2_hit']}`\n"
+        f"🛑 SL ga yetdi: `{s['sl_hit']}`\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"✅ *Win-rate: {win_rate}%*\n\n"
+        f"_Bu ko'rsatkich bot ishga tushgandan beri kuzatilgan real "
+        f"natija, taxmin emas. Server qayta ishga tushsa (masalan "
+        f"deploy paytida), bu statistika 0 dan boshlanadi._"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 # ══════════════════════════════════════════════
 #  ISHGA TUSHIRISH
 # ══════════════════════════════════════════════
@@ -1169,6 +1473,7 @@ async def _set_bot_commands(app):
         BotCommand("sentiment", "🧠 Bozor kayfiyati (Fear & Greed)"),
         BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr XAUUSD)"),
         BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib XAUUSD)"),
+        BotCommand("stats",     "📊 Botning haqiqiy win-rate statistikasi"),
     ]
     await app.bot.set_my_commands(commands)
     log.info("✅ Bot komandalar menyusi o'rnatildi")
@@ -1177,10 +1482,11 @@ def main():
     app=Application.builder().token(BOT_TOKEN).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),
                    ("signal",cmd_signal),("news",cmd_news),
-                   ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib)]:
+                   ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib),
+                   ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v9.0 (Auto-Stable) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v11.0 (Win-Rate + News Blackout) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
