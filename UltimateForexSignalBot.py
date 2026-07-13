@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v11.0 (Win-Rate + News Blackout) — Telegram Signal Bot
+UltimateForexSignalBot v12.0 (Pro Scalping Suite) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
@@ -1255,7 +1255,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v11.0 (Win-Rate + News Blackout)*\n\n"
+        "👋 *UltimateForexSignalBot v12.0 (Pro Scalping Suite)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -1486,7 +1486,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v11.0 (Win-Rate + News Blackout) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v12.0 (Pro Scalping Suite) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
