@@ -2,7 +2,7 @@
 """
 UltimateForexSignalBot v9.0 (Auto-Stable) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
-Juftliklar: XAUUSD, XAGUSD, BTCUSD, EURUSD, GBPUSD, SPX500
+Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
 Signal manbalari (ICT / Smart Money Concepts asosida):
   1.  EMA trend (10/50) — umumiy yo'nalish
@@ -34,7 +34,6 @@ oqimi tahlili ustunlik qiladi.
 
 Intraday/Swing:
   Forex/Metal: 07:00–21:00 UTC (London + NY sessiyasi)
-  SPX500:      13:30–20:00 UTC (AQSh birja sessiyasi, dam olish kunlari yopiq)
   Bitcoin:     00:00–24:00 UTC (24/7)
 """
 
@@ -58,16 +57,18 @@ FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")  # finnhub.io — bepul 
 SYMBOL_MAP = {
     "XAUUSD":  "GC=F",      # Oltin
     "XAGUSD":  "SI=F",      # Kumush
-    "BTCUSD":  "BTC-USD",   # Bitcoin
     "EURUSD":  "EURUSD=X",  # Euro/Dollar
     "GBPUSD":  "GBPUSD=X",  # Funt/Dollar
-    "SPX500":  "^GSPC",     # S&P 500 indeksi
+    "USDCHF":  "USDCHF=X",  # Dollar/Shveytsariya franki
+    "USDCAD":  "USDCAD=X",  # Dollar/Kanada dollari
+    "EURCHF":  "EURCHF=X",  # Euro/Shveytsariya franki
+    "AUDCHF":  "AUDCHF=X",  # Avstraliya dollari/Shveytsariya franki
+    "AUDUSD":  "AUDUSD=X",  # Avstraliya dollari/AQSh dollari
 }
 SYMBOLS = list(SYMBOL_MAP.keys())
 
-# Bitcoin va SPX500 boshqa sessiyaga ega
-CRYPTO_SYMBOLS = {"BTCUSD"}
-INDEX_SYMBOLS  = {"SPX500"}   # AQSh birja sessiyasi: 13:30-20:00 UTC (qishda), yozda 13:30-20:00
+CRYPTO_SYMBOLS = set()   # Hozircha kripto yo'q
+INDEX_SYMBOLS  = set()   # Hozircha indeks yo'q
 
 # Intraday sozlamalar
 CHECK_INTERVAL        = 5    # daqiqa
@@ -94,8 +95,11 @@ PAIR_COUNTRY_MAP = {
     "GBPUSD": {"GB", "US"},
     "XAUUSD": {"US"},
     "XAGUSD": {"US"},
-    "BTCUSD": {"US"},
-    "SPX500": {"US"},
+    "USDCHF": {"US", "CH"},
+    "USDCAD": {"US", "CA"},
+    "EURCHF": {"EU", "CH"},
+    "AUDCHF": {"AU", "CH"},
+    "AUDUSD": {"AU", "US"},
 }
 
 _news_cache = {"data": None, "updated": None}
@@ -740,8 +744,9 @@ def check_news(symbol: str) -> list:
 #  XABAR FORMATLASH
 # ══════════════════════════════════════════════
 SYMBOL_EMOJI = {
-    "XAUUSD":"🥇","XAGUSD":"🥈","BTCUSD":"₿",
-    "EURUSD":"💶","GBPUSD":"💷","SPX500":"📈"
+    "XAUUSD":"🥇","XAGUSD":"🥈",
+    "EURUSD":"💶","GBPUSD":"💷","USDCHF":"🇨🇭","USDCAD":"🇨🇦",
+    "EURCHF":"💱","AUDCHF":"💱","AUDUSD":"🇦🇺"
 }
 
 def fmt_signal(symbol,sig,news,remaining) -> str:
@@ -816,7 +821,7 @@ _pending     = {}   # {symbol: {"direction": "BUY", "score": 8, "price": ...}} �
 _sent_signal_msgs = []  # [{"chat_id":..., "message_id":..., "expire_at":...}] — avtomatik o'chirish uchun
 
 def is_session(symbol: str, now: datetime) -> bool:
-    """Bitcoin 24/7; SPX500 AQSh birja sessiyasida; qolganlar forex sessiyasida"""
+    """Barcha juftliklar forex sessiyasida ishlaydi"""
     if symbol in CRYPTO_SYMBOLS:
         return True
     if symbol in INDEX_SYMBOLS:
@@ -998,10 +1003,13 @@ async def cmd_start(update,context):
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
-        "  ₿  BTCUSD — Bitcoin (24/7)\n"
         "  💶 EURUSD — Euro/Dollar\n"
         "  💷 GBPUSD — Funt/Dollar\n"
-        "  📈 SPX500 — S&P 500 indeksi\n\n"
+        "  🇨🇭 USDCHF — Dollar/Frank\n"
+        "  🇨🇦 USDCAD — Dollar/Kanada\n"
+        "  💱 EURCHF — Euro/Frank\n"
+        "  💱 AUDCHF — Avstraliya/Frank\n"
+        "  🇦🇺 AUDUSD — Avstraliya/Dollar\n\n"
         "🧠 *Strategiya:* ICT / Smart Money Concepts\n"
         "  • Imbalans (Fair Value Gap)\n"
         "  • Order Blocks\n"
@@ -1019,7 +1027,7 @@ async def cmd_start(update,context):
         "/news — Yangiliklar\n"
         "/sentiment — Bozor kayfiyati\n"
         "/sr XAUUSD — Support/Resistance\n"
-        "/fib BTCUSD — Fibonacci\n",
+        "/fib XAUUSD — Fibonacci\n",
         parse_mode="Markdown"
     )
 
@@ -1160,7 +1168,7 @@ async def _set_bot_commands(app):
         BotCommand("news",      "📰 Yaqin yangiliklar"),
         BotCommand("sentiment", "🧠 Bozor kayfiyati (Fear & Greed)"),
         BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr XAUUSD)"),
-        BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib BTCUSD)"),
+        BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib XAUUSD)"),
     ]
     await app.bot.set_my_commands(commands)
     log.info("✅ Bot komandalar menyusi o'rnatildi")
