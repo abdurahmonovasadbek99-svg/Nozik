@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v12.0 (Pro Scalping Suite) — Telegram Signal Bot
+UltimateForexSignalBot v13.0 (Pure Scalping) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
@@ -693,7 +693,7 @@ def get_scalp_confluence(symbol: str, direction: str) -> dict:
 # ══════════════════════════════════════════════
 #  SIGNAL GENERATSIYA
 # ══════════════════════════════════════════════
-def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,pd_zone=None,killzone=None,mode="intraday",vwap=None,orb=None,mom_retest=None,round_num=None) -> dict | None:
+def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,pd_zone=None,killzone=None,mode="scalp",vwap=None,orb=None,mom_retest=None,round_num=None) -> dict | None:
     B=0; S=0; R=[]
     p=ind["price"]; atr=ind["atr"]; adx=ind["adx"]
     trend  = trend or {}
@@ -769,9 +769,9 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
     elif sentiment["greed"]:       S+=1; R.append(f"😏 Greed ({fg})")
     else:                          R.append(f"😐 Neytral ({fg})")
 
-    # 12. HTF (Top-Down Analysis) — Intraday uchun QATTIQ filtr, Swing uchun yumshoq
-    if mode == "intraday":
-        # Intraday'da 1H/4H trendga zid signal UMUMAN qabul qilinmaydi —
+    # 12. HTF (Top-Down Analysis) — Scalping uchun QATTIQ filtr
+    if mode == "scalp":
+        # Scalping'da 1H/4H trendga zid signal UMUMAN qabul qilinmaydi —
         # bu "shovqinga qarshi savdo qilish" xatosining oldini oladi.
         if htf=="UP" and S>B:
             R.append("⛔ 4H trend yuqoriga, lekin SELL signal — Top-Down filtri rad etdi")
@@ -865,11 +865,8 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
         R.append(f"⚠️ Volatillik juda yuqori ({round(atr_pct,3)}%) — xavfli, signal rad etildi")
         return None
 
-    # ── SL/TP — rejimga qarab (Intraday: tez, kichikroq | Swing: sekin, kattaroq) ──
-    if mode == "swing":
-        sl_mult, tp1_mult, tp2_mult = 2.0, 4.0, 7.0
-    else:  # intraday
-        sl_mult, tp1_mult, tp2_mult = 1.2, 2.0, 3.2
+    # ── SL/TP — Scalping uchun tez va kichik maqsadlar (5m grafik) ──
+    sl_mult, tp1_mult, tp2_mult = 0.8, 1.5, 2.5
 
     sl  = round(p - atr*sl_mult, 5)  if direction=="BUY" else round(p + atr*sl_mult, 5)
     tp1 = round(p + atr*tp1_mult, 5) if direction=="BUY" else round(p - atr*tp1_mult, 5)
@@ -881,7 +878,7 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
     risk   = abs(p - sl)
     reward = abs(tp1 - p)
     rr     = round(reward / risk, 2) if risk > 0 else 0
-    min_rr = 1.6 if mode == "intraday" else 1.8
+    min_rr = 1.6
     if rr < min_rr:
         R.append(f"⚠️ Risk/Reward past ({rr}) — kamida {min_rr} talab qilinadi, signal rad etildi")
         return None
@@ -924,7 +921,7 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
     de = "🟢" if sig["direction"]=="BUY" else "🔴"
     now= datetime.now(timezone.utc).strftime("%H:%M UTC")
     sr = sig["sr"]; fib=sig["fib"]; fg=sig["sentiment"]
-    mode_label = "⚡ INTRADAY (15m)" if sig.get("mode")=="intraday" else "🐢 SWING (4h)"
+    mode_label = "⚡ SCALPING (5m)"
 
     msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']}\n"
          f"🏷️ {mode_label}\n"
@@ -1118,12 +1115,12 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             killzone=get_ict_killzone(now)
 
             # ── Ikkala rejim uchun alohida tahlil: Intraday (15m) va Swing (4h) ──
-            for mode, period, interval in (("intraday","1mo","1h"), ("swing","3mo","4h")):
+            for mode, period, interval in (("scalp","1d","5m"),):
                 pending_key = f"{symbol}_{mode}"
                 if not can_signal(pending_key, now): continue
 
                 df=get_price_data(symbol, period=period, interval=interval)
-                min_bars = 60 if mode=="intraday" else 55
+                min_bars = 20
                 if df is None or len(df)<min_bars: continue
 
                 ind=calc_ind(df)
@@ -1144,7 +1141,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                 # ── Confirmation mantiqi (har rejim uchun alohida) ──
                 # Intraday uchun 2 marta ketma-ket bir xil yo'nalishda signal
                 # kelishi kerak (shovqinni filtrlash uchun), Swing uchun 1 bar yetarli.
-                required_confirmations = 2 if mode == "intraday" else 1
+                required_confirmations = 2
                 if REQUIRE_CONFIRMATION:
                     prev = _pending.get(pending_key)
                     if sig:
@@ -1219,7 +1216,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
         sent = await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         # Muddati o'tganda avtomatik o'chirish uchun ro'yxatga qo'shamiz.
         # Intraday tezroq eskiradi (1 soat), Swing sekinroq (6 soat).
-        expire_hours = 1 if mode == "intraday" else 6
+        expire_hours = 0.5
         _sent_signal_msgs.append({
             "chat_id": CHAT_ID, "message_id": sent.message_id,
             "expire_at": now + pd.Timedelta(hours=expire_hours),
@@ -1255,7 +1252,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v12.0 (Pro Scalping Suite)*\n\n"
+        "👋 *UltimateForexSignalBot v13.0 (Pure Scalping)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -1272,12 +1269,13 @@ async def cmd_start(update,context):
         "  • BOS / CHoCH (Market Structure)\n"
         "  • Premium/Discount zonalar\n"
         "  • ICT Killzones\n"
-        "  • SNR (Support/Resistance)\n\n"
+        "  • SNR (Support/Resistance)\n"
+        "  • VWAP, ORB, Momentum Retest\n\n"
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
-        f"🎯 Scalping: 5m+15m+1H Multi-Timeframe Confluence\n"
-        f"🧹 Eskirgan signallar avtomatik o'chiriladi (Intraday: 1s, Swing: 6s)\n\n"
+        f"🎯 Rejim: SCALPING (5m asosiy, 5m+15m+1H confluence)\n"
+        f"🧹 Signallar 30 daqiqadan keyin avtomatik o'chiriladi\n\n"
         "📋 *Komandalar:*\n"
         "/signal — Hozirgi signallar\n"
         "/status — Joriy narxlar\n"
@@ -1308,9 +1306,9 @@ async def cmd_signal(update,context):
     for sym in SYMBOLS:
         htf=get_htf(sym)
         killzone=get_ict_killzone(now)
-        for mode, period, interval in (("intraday","1mo","1h"), ("swing","3mo","4h")):
+        for mode, period, interval in (("scalp","1d","5m"),):
             df=get_price_data(sym, period=period, interval=interval)
-            min_bars = 60 if mode=="intraday" else 55
+            min_bars = 20
             if df is None or len(df)<min_bars: continue
             ind=calc_ind(df); pat=detect_patterns(df)
             sr=calc_sr(df); fib=calc_fib(df)
@@ -1486,7 +1484,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v12.0 (Pro Scalping Suite) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v13.0 (Pure Scalping) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
