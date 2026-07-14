@@ -1493,13 +1493,11 @@ if __name__=="__main__":
     # PORT'ni HAMMA narsadan oldin, darhol ochamiz — Render buni tez ko'rishi kerak
     threading.Thread(target=start_fake_server, daemon=True).start()
 
-    # ── BARQARORLIK: agar bot kutilmagan xato bilan yiqilsa, avtomatik
-    # qayta ishga tushiriladi (cheksiz urinish, orada kichik pauza bilan) ──
-    while True:
-        try:
-            main()
-        except Exception as e:
-            log.error(f"⚠️ Bot kutilmagan xato bilan to'xtadi: {e}")
-            log.info("🔄 10 soniyadan keyin avtomatik qayta ishga tushadi...")
-            import time
-            time.sleep(10)
+    # Eslatma: agar bot kutilmagan xato bilan yiqilsa, jarayon to'liq
+    # to'xtaydi va Render buni "Failed"/"Exited" deb belgilaydi — lekin
+    # Render'ning o'z platformasi jarayon yiqilganda uni AVTOMATIK qayta
+    # ishga tushiradi (bu Render'ning standart xatti-harakati bepul va
+    # pullik tariflarda ham). Shu sababli bu yerda qo'lda "while True"
+    # restart loop qilish shart emas — bu asyncio event loop bilan
+    # ziddiyatga olib kelishi mumkin ("Event loop is closed" xatosi).
+    main()
