@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v13.0 (Pure Scalping) — Telegram Signal Bot
+UltimateForexSignalBot v15.0 (Candlestick Pro) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
@@ -9,7 +9,8 @@ Signal manbalari (ICT / Smart Money Concepts asosida):
   2.  ICT Premium/Discount zonalar — Equilibrium asosida
   3.  ICT Killzones — London/NY yuqori faollik soatlari
   4.  ADX — trend kuchi filtri
-  5.  Klassik shamcha patternlari (Pin Bar, Engulfing, Double Top/Bottom, Doji)
+  5.  Yapon shamlari patternlari (Pin Bar, Engulfing, Hammer, Morning/Evening
+      Star, Three White Soldiers/Black Crows, Harami, Double Top/Bottom, Doji)
   6.  Fibonacci darajalari (0.382, 0.5, 0.618)
   7.  Support / Resistance (SNR) darajalari
   8.  Volume tahlili
@@ -416,18 +417,62 @@ def detect_patterns(df: pd.DataFrame) -> dict:
     o,h,l,c = df["open"].values, df["high"].values, df["low"].values, df["close"].values
     n = len(c)
     p = {k:False for k in ["bullish_pin","bearish_pin","bull_engulf",
-                             "bear_engulf","doji","double_top","double_bottom"]}
+                             "bear_engulf","doji","double_top","double_bottom",
+                             "morning_star","evening_star",
+                             "three_white_soldiers","three_black_crows",
+                             "bull_harami","bear_harami",
+                             "hammer","hanging_man"]}
     if n < 3: return p
     body = abs(c[-1]-o[-1]); rng = h[-1]-l[-1]
     uw = h[-1]-max(c[-1],o[-1]); lw = min(c[-1],o[-1])-l[-1]
+
+    # ── Trendni aniqlash (oxirgi patternni to'g'ri talqin qilish uchun) ──
+    # Hammer past trenddan keyin bo'lsa qaytish, Hanging Man yuqori trenddan
+    # keyin bo'lsa qaytish belgisi — shuning uchun oldingi 5 barga qaraymiz.
+    prior_trend_down = n >= 6 and c[-6] > c[-2]
+    prior_trend_up   = n >= 6 and c[-6] < c[-2]
+
     if rng > 0:
-        if lw > body*2 and uw < body*0.5: p["bullish_pin"]  = True
-        if uw > body*2 and lw < body*0.5: p["bearish_pin"]  = True
-        if body < rng*0.1:                p["doji"]         = True
+        if lw > body*2 and uw < body*0.5:
+            p["bullish_pin"] = True
+            if prior_trend_down: p["hammer"] = True
+        if uw > body*2 and lw < body*0.5:
+            p["bearish_pin"] = True
+            if prior_trend_up: p["hanging_man"] = True
+        if body < rng*0.1: p["doji"] = True
+
     pt=max(o[-2],c[-2]); pb=min(o[-2],c[-2])
     ct=max(o[-1],c[-1]); cb=min(o[-1],c[-1])
     if c[-2]<o[-2] and c[-1]>o[-1] and ct>=pt and cb<=pb: p["bull_engulf"] = True
     if c[-2]>o[-2] and c[-1]<o[-1] and ct>=pt and cb<=pb: p["bear_engulf"] = True
+
+    # ── Harami — kichik sham oldingi kattaning "ichida" (Engulfing'ning teskarisi) ──
+    if c[-2]<o[-2] and ct<=pt and cb>=pb and (ct-cb) < (pt-pb)*0.6:
+        p["bull_harami"] = True
+    if c[-2]>o[-2] and ct<=pt and cb>=pb and (ct-cb) < (pt-pb)*0.6:
+        p["bear_harami"] = True
+
+    # ── Morning Star / Evening Star (3 shamli qaytish patterni) ──
+    if n >= 3:
+        b1 = abs(c[-3]-o[-3]); b2 = abs(c[-2]-o[-2]); b3 = abs(c[-1]-o[-1])
+        # Morning Star: katta qizil → kichik (indecision) → katta yashil
+        if c[-3]<o[-3] and b1>0 and b2 < b1*0.4 and c[-1]>o[-1] and b3 > b1*0.6 and c[-1] > (o[-3]+c[-3])/2:
+            p["morning_star"] = True
+        # Evening Star: katta yashil → kichik → katta qizil
+        if c[-3]>o[-3] and b1>0 and b2 < b1*0.4 and c[-1]<o[-1] and b3 > b1*0.6 and c[-1] < (o[-3]+c[-3])/2:
+            p["evening_star"] = True
+
+    # ── Three White Soldiers / Three Black Crows (3 shamli trend davomiyligi) ──
+    if n >= 3:
+        if (c[-3]>o[-3] and c[-2]>o[-2] and c[-1]>o[-1] and
+            c[-2]>c[-3] and c[-1]>c[-2] and
+            o[-2]>o[-3] and o[-2]<c[-3] and o[-1]>o[-2] and o[-1]<c[-2]):
+            p["three_white_soldiers"] = True
+        if (c[-3]<o[-3] and c[-2]<o[-2] and c[-1]<o[-1] and
+            c[-2]<c[-3] and c[-1]<c[-2] and
+            o[-2]<o[-3] and o[-2]>c[-3] and o[-1]<o[-2] and o[-1]>c[-2]):
+            p["three_black_crows"] = True
+
     if n >= 20:
         rh=h[-20:]; rl=l[-20:]
         peaks=[i for i in range(1,19) if rh[i]>rh[i-1] and rh[i]>rh[i+1]]
@@ -733,13 +778,23 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
     else:
         R.append(f"💪 ADX kuchli ({adx})")
 
-    # 7. Patternlar
+    # 7. Klassik yapon shamlari patternlari
     if pat["bullish_pin"]:   B+=2; R.append("🕯️ Bullish Pin Bar")
     if pat["bull_engulf"]:   B+=2; R.append("🕯️ Bullish Engulfing")
     if pat["double_bottom"]: B+=2; R.append("📐 Double Bottom")
+    if pat["hammer"]:        B+=2; R.append("🔨 Hammer (pastdan qaytish)")
+    if pat["morning_star"]:  B+=3; R.append("🌟 Morning Star (kuchli qaytish)")
+    if pat["three_white_soldiers"]: B+=3; R.append("🕯️🕯️🕯️ Three White Soldiers (kuchli davomiylik)")
+    if pat["bull_harami"]:   B+=1; R.append("➕ Bullish Harami (trend zaiflashmoqda)")
+
     if pat["bearish_pin"]:   S+=2; R.append("🕯️ Bearish Pin Bar")
     if pat["bear_engulf"]:   S+=2; R.append("🕯️ Bearish Engulfing")
     if pat["double_top"]:    S+=2; R.append("📐 Double Top")
+    if pat["hanging_man"]:   S+=2; R.append("🔨 Hanging Man (yuqoridan qaytish)")
+    if pat["evening_star"]:  S+=3; R.append("🌟 Evening Star (kuchli qaytish)")
+    if pat["three_black_crows"]: S+=3; R.append("🕯️🕯️🕯️ Three Black Crows (kuchli davomiylik)")
+    if pat["bear_harami"]:   S+=1; R.append("➕ Bearish Harami (trend zaiflashmoqda)")
+
     if pat["doji"]:
         B=max(0,B-1); S=max(0,S-1)
         R.append("➖ Doji — bozor ikkilanmoqda")
@@ -865,8 +920,11 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
         R.append(f"⚠️ Volatillik juda yuqori ({round(atr_pct,3)}%) — xavfli, signal rad etildi")
         return None
 
-    # ── SL/TP — Scalping uchun tez va kichik maqsadlar (5m grafik) ──
-    sl_mult, tp1_mult, tp2_mult = 0.8, 1.5, 2.5
+    # ── SL/TP — rejimga qarab (Scalp: 5m tez/kichik, Intraday: 1H sekinroq/kattaroq) ──
+    if mode == "scalp":
+        sl_mult, tp1_mult, tp2_mult = 0.8, 1.5, 2.5
+    else:  # intraday
+        sl_mult, tp1_mult, tp2_mult = 1.2, 2.2, 3.5
 
     sl  = round(p - atr*sl_mult, 5)  if direction=="BUY" else round(p + atr*sl_mult, 5)
     tp1 = round(p + atr*tp1_mult, 5) if direction=="BUY" else round(p - atr*tp1_mult, 5)
@@ -921,7 +979,7 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
     de = "🟢" if sig["direction"]=="BUY" else "🔴"
     now= datetime.now(timezone.utc).strftime("%H:%M UTC")
     sr = sig["sr"]; fib=sig["fib"]; fg=sig["sentiment"]
-    mode_label = "⚡ SCALPING (5m)"
+    mode_label = "⚡ SCALPING (5m)" if sig.get("mode")=="scalp" else "📊 INTRADAY (1H)"
 
     msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']}\n"
          f"🏷️ {mode_label}\n"
@@ -1114,13 +1172,13 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             htf=get_htf(symbol)
             killzone=get_ict_killzone(now)
 
-            # ── Ikkala rejim uchun alohida tahlil: Intraday (15m) va Swing (4h) ──
-            for mode, period, interval in (("scalp","1d","5m"),):
+            # ── Ikkala rejim: Scalping (5m) va Intraday (1h) ──
+            for mode, period, interval in (("scalp","1d","5m"), ("intraday","1mo","1h")):
                 pending_key = f"{symbol}_{mode}"
                 if not can_signal(pending_key, now): continue
 
                 df=get_price_data(symbol, period=period, interval=interval)
-                min_bars = 20
+                min_bars = 20 if mode == "scalp" else 60
                 if df is None or len(df)<min_bars: continue
 
                 ind=calc_ind(df)
@@ -1141,7 +1199,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                 # ── Confirmation mantiqi (har rejim uchun alohida) ──
                 # Intraday uchun 2 marta ketma-ket bir xil yo'nalishda signal
                 # kelishi kerak (shovqinni filtrlash uchun), Swing uchun 1 bar yetarli.
-                required_confirmations = 2
+                required_confirmations = 2 if mode == "scalp" else 1
                 if REQUIRE_CONFIRMATION:
                     prev = _pending.get(pending_key)
                     if sig:
@@ -1216,7 +1274,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
         sent = await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         # Muddati o'tganda avtomatik o'chirish uchun ro'yxatga qo'shamiz.
         # Intraday tezroq eskiradi (1 soat), Swing sekinroq (6 soat).
-        expire_hours = 0.5
+        expire_hours = 0.5 if mode == "scalp" else 1.5
         _sent_signal_msgs.append({
             "chat_id": CHAT_ID, "message_id": sent.message_id,
             "expire_at": now + pd.Timedelta(hours=expire_hours),
@@ -1252,7 +1310,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v13.0 (Pure Scalping)*\n\n"
+        "👋 *UltimateForexSignalBot v15.0 (Candlestick Pro)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -1274,7 +1332,7 @@ async def cmd_start(update,context):
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
-        f"🎯 Rejim: SCALPING (5m asosiy, 5m+15m+1H confluence)\n"
+        f"🎯 Rejim: SCALPING (5m) + INTRADAY (1H) — birga ishlaydi\n"
         f"🧹 Signallar 30 daqiqadan keyin avtomatik o'chiriladi\n\n"
         "📋 *Komandalar:*\n"
         "/signal — Hozirgi signallar\n"
@@ -1306,9 +1364,9 @@ async def cmd_signal(update,context):
     for sym in SYMBOLS:
         htf=get_htf(sym)
         killzone=get_ict_killzone(now)
-        for mode, period, interval in (("scalp","1d","5m"),):
+        for mode, period, interval in (("scalp","1d","5m"), ("intraday","1mo","1h")):
             df=get_price_data(sym, period=period, interval=interval)
-            min_bars = 20
+            min_bars = 20 if mode == "scalp" else 60
             if df is None or len(df)<min_bars: continue
             ind=calc_ind(df); pat=detect_patterns(df)
             sr=calc_sr(df); fib=calc_fib(df)
@@ -1484,7 +1542,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v13.0 (Pure Scalping) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v15.0 (Candlestick Pro) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
