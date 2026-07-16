@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v15.0 (Candlestick Pro) — Telegram Signal Bot
+UltimateForexSignalBot v16.0 (+Asia Session) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
 
@@ -74,8 +74,10 @@ INDEX_SYMBOLS  = set()   # Hozircha indeks yo'q
 # Intraday sozlamalar
 CHECK_INTERVAL        = 5    # daqiqa
 MAX_DAILY_SIGNALS     = 6    # har juftlik + har rejim uchun (Intraday va Swing alohida hisoblanadi)
-TRADING_START         = 7    # UTC (forex/metal uchun)
-TRADING_END           = 21   # UTC (forex/metal uchun)
+TRADING_START         = 7    # UTC (London sessiyasi boshlanishi)
+TRADING_END           = 21   # UTC (NY sessiyasi tugashi)
+ASIA_SESSION_START    = 23   # UTC (Tokyo sessiyasi boshlanishi)
+ASIA_SESSION_END      = 8    # UTC (Tokyo sessiyasi tugashi, ertasi kun)
 EOD_REMINDER_HOUR     = 20   # UTC
 MIN_SCORE             = 9    # Minimal ball (avval 6 edi — qattiqroq filtr uchun oshirildi)
 REQUIRE_CONFIRMATION  = True # Signal chiqqach 1 bar tasdiqlashini kutish
@@ -651,12 +653,15 @@ def calc_premium_discount(df: pd.DataFrame, lookback: int = 50) -> dict:
 def get_ict_killzone(now: datetime) -> str | None:
     """
     ICT konsepti bo'yicha eng faol savdo oynalari (UTC vaqtida):
+      - Asia Killzone:      00:00-03:00 (Tokyo ochilishi, likvidlik shakllanishi)
       - London Killzone:    07:00-10:00
       - New York Killzone:  12:00-15:00
       - London Close:       15:00-17:00
     Bu vaqtlarda institutsional harakat ehtimoli yuqori hisoblanadi.
     """
     h = now.hour
+    if 0 <= h < 3:
+        return "Asia Killzone"
     if 7 <= h < 10:
         return "London Killzone"
     if 12 <= h < 15:
@@ -977,55 +982,36 @@ SYMBOL_EMOJI = {
 def fmt_signal(symbol,sig,news,remaining) -> str:
     se = SYMBOL_EMOJI.get(symbol,"💱")
     de = "🟢" if sig["direction"]=="BUY" else "🔴"
-    now= datetime.now(timezone.utc).strftime("%H:%M UTC")
-    sr = sig["sr"]; fib=sig["fib"]; fg=sig["sentiment"]
-    mode_label = "⚡ SCALPING (5m)" if sig.get("mode")=="scalp" else "📊 INTRADAY (1H)"
+    now= datetime.now(timezone.utc).strftime("%H:%M")
+    mode_label = "⚡ Scalp" if sig.get("mode")=="scalp" else "📊 Intraday"
 
-    msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']}\n"
-         f"🏷️ {mode_label}\n"
-         f"━━━━━━━━━━━━━━━━━━\n"
-         f"💰 Narx:  `{sig['price']}`\n"
-         f"🎯 TP1:   `{sig['tp1']}`\n"
-         f"🎯 TP2:   `{sig['tp2']}`\n"
-         f"🛡️ SL:    `{sig['sl']}`\n"
-         f"⚖️ R:R:   `1:{sig['rr']}`\n"
-         f"📈 ADX:   `{sig['adx']}`\n"
-         f"⭐ Ball:  `{sig['score']}/30`\n"
-         f"⏰ Vaqt:  `{now}`\n"
-         f"📅 Qoldi: `{remaining}/{MAX_DAILY_SIGNALS}`\n"
-         f"━━━━━━━━━━━━━━━━━━\n")
+    msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']} | {mode_label}\n"
+         f"💰 `{sig['price']}`  🎯TP1 `{sig['tp1']}`  🛡SL `{sig['sl']}`\n"
+         f"⚖️R:R 1:{sig['rr']}  ⭐{sig['score']}/30  🕐{now}\n")
 
     pz = sig.get("pd_zone")
+    zone_bits = []
     if pz:
-        zone_label = "💰 Discount" if pz["zone"]=="discount" else "💎 Premium"
-        msg += f"📍 *ICT zona:* {zone_label} ({pz['pct_in_range']}%)\n"
+        zone_bits.append("💰Discount" if pz["zone"]=="discount" else "💎Premium")
     if sig.get("killzone"):
-        msg += f"⏰ *Killzone:* {sig['killzone']}\n"
+        zone_bits.append(f"⏰{sig['killzone']}")
+    if zone_bits:
+        msg += " · ".join(zone_bits) + "\n"
 
-    if sr["support"] or sr["resistance"]:
-        msg += "🧱 *S/R:*\n"
-        if sr["support"]:
-            msg += f"  🟢 Support: `{sr['support']}`"
-            if sr["at_support"]: msg += " ⬅️ HOZIR"
-            msg += "\n"
-        if sr["resistance"]:
-            msg += f"  🔴 Resist:  `{sr['resistance']}`"
-            if sr["at_resistance"]: msg += " ⬅️ HOZIR"
-            msg += "\n"
-
-    if fib["near"]:
-        msg += f"📐 *Fib {fib['near_type']}:* `{fib['near']}`\n"
-
-    msg += f"🧠 *Sentiment:* `{fg['rating']}` ({fg['score']})\n"
-    msg += "━━━━━━━━━━━━━━━━━━\n*Sabablar:*\n"
-    for r in sig["reasons"]: msg += f"  {r}\n"
+    # Faqat eng muhim (kuchli) sabablarni ko'rsatamiz — to'liq ro'yxat emas
+    top_reasons = [r for r in sig["reasons"] if any(
+        e in r for e in ["🌟","🕯️🕯️🕯️","🧠","🚀","⚡ Imbalans","🟦","🟥","⛔","✅ Multi-TF"]
+    )][:4]
+    if not top_reasons:
+        top_reasons = sig["reasons"][:3]
+    if top_reasons:
+        msg += "\n" + "\n".join(f"• {r}" for r in top_reasons) + "\n"
 
     if news:
-        msg += "\n⚠️ *YANGILIKLAR:*\n"
-        for n in news:
-            t = f"{n['diff_min']} daqiqa" if n["diff_min"]>0 else "HOZIR FAOL"
-            msg += f"  {n['name']} — {t}\n"
-        msg += "💡 _Ehtiyot bo'ling!_"
+        n = news[0]
+        t = f"{n['diff_min']}daq" if n["diff_min"]>0 else "HOZIR"
+        msg += f"\n⚠️ {n['name']} — {t}"
+
     return msg.strip()
 
 def fmt_news_alert(news,symbol) -> str:
@@ -1053,13 +1039,32 @@ _tracked_signals = []  # [{"symbol","mode","direction","entry","sl","tp1","tp2",
 _stats = {"total": 0, "tp1_hit": 0, "tp2_hit": 0, "sl_hit": 0, "open": 0}
 
 def is_session(symbol: str, now: datetime) -> bool:
-    """Barcha juftliklar forex sessiyasida ishlaydi"""
+    """Barcha juftliklar London+NY yoki Osiyo (Tokyo) sessiyasida ishlaydi"""
     if symbol in CRYPTO_SYMBOLS:
         return True
     if symbol in INDEX_SYMBOLS:
         # AQSh fond birjasi taxminan 13:30-20:00 UTC (dam olish kunlari yopiq)
         return now.weekday() < 5 and 13 <= now.hour < 20
-    return TRADING_START <= now.hour < TRADING_END
+
+    in_london_ny = TRADING_START <= now.hour < TRADING_END
+    # Osiyo sessiyasi kechqurun boshlanib, ertalab tugaydi (23:00 → 08:00),
+    # ya'ni tun yarmidan o'tadi — shuning uchun "yoki" mantig'i bilan tekshiramiz
+    in_asia = now.hour >= ASIA_SESSION_START or now.hour < ASIA_SESSION_END
+
+    return in_london_ny or in_asia
+
+def get_current_session_name(now: datetime) -> str:
+    """Xabarda ko'rsatish uchun joriy sessiya nomini qaytaradi"""
+    h = now.hour
+    if 7 <= h < 13:
+        return "🇬🇧 London"
+    if 13 <= h < 16:
+        return "🇬🇧🇺🇸 London+NY"
+    if 16 <= h < 21:
+        return "🇺🇸 New York"
+    if h >= 23 or h < 8:
+        return "🇯🇵 Osiyo (Tokyo)"
+    return "😴 Tinch vaqt"
 
 def can_signal(symbol,now) -> bool:
     today=now.strftime("%Y-%m-%d")
@@ -1310,7 +1315,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v15.0 (Candlestick Pro)*\n\n"
+        "👋 *UltimateForexSignalBot v16.0 (+Asia Session)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  🥇 XAUUSD — Oltin\n"
         "  🥈 XAGUSD — Kumush\n"
@@ -1330,7 +1335,7 @@ async def cmd_start(update,context):
         "  • SNR (Support/Resistance)\n"
         "  • VWAP, ORB, Momentum Retest\n\n"
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
-        f"⏰ Sessiya: {TRADING_START}:00–{TRADING_END}:00 UTC\n"
+        f"⏰ Sessiya: London+NY ({TRADING_START}:00–{TRADING_END}:00) + 🇯🇵 Osiyo ({ASIA_SESSION_START}:00–{ASIA_SESSION_END}:00) UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
         f"🎯 Rejim: SCALPING (5m) + INTRADAY (1H) — birga ishlaydi\n"
         f"🧹 Signallar 30 daqiqadan keyin avtomatik o'chiriladi\n\n"
@@ -1542,7 +1547,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v15.0 (Candlestick Pro) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v16.0 (+Asia Session) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
