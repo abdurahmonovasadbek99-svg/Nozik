@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v16.0 (+Asia Session) — Telegram Signal Bot
+UltimateForexSignalBot v23.0 (Strong Signal Override) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
-Juftliklar: XAUUSD, XAGUSD, EURUSD, GBPUSD, USDCHF, USDCAD, EURCHF, AUDCHF, AUDUSD
+Juftliklar: EURUSD, GBPUSD, AUDUSD, USDJPY, NZDUSD
 
 Signal manbalari (ICT / Smart Money Concepts asosida):
   1.  EMA trend (10/50) — umumiy yo'nalish
@@ -56,15 +56,11 @@ FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")  # finnhub.io — bepul 
 
 # Juftliklar va Yahoo Finance tickerlari
 SYMBOL_MAP = {
-    "XAUUSD":  "GC=F",      # Oltin
-    "XAGUSD":  "SI=F",      # Kumush
     "EURUSD":  "EURUSD=X",  # Euro/Dollar
     "GBPUSD":  "GBPUSD=X",  # Funt/Dollar
-    "USDCHF":  "USDCHF=X",  # Dollar/Shveytsariya franki
-    "USDCAD":  "USDCAD=X",  # Dollar/Kanada dollari
-    "EURCHF":  "EURCHF=X",  # Euro/Shveytsariya franki
-    "AUDCHF":  "AUDCHF=X",  # Avstraliya dollari/Shveytsariya franki
     "AUDUSD":  "AUDUSD=X",  # Avstraliya dollari/AQSh dollari
+    "USDJPY":  "JPY=X",     # Dollar/Yaponiya yenasi
+    "NZDUSD":  "NZDUSD=X",  # Yangi Zelandiya dollari/AQSh dollari
 }
 SYMBOLS = list(SYMBOL_MAP.keys())
 
@@ -72,8 +68,8 @@ CRYPTO_SYMBOLS = set()   # Hozircha kripto yo'q
 INDEX_SYMBOLS  = set()   # Hozircha indeks yo'q
 
 # Intraday sozlamalar
-CHECK_INTERVAL        = 5    # daqiqa
-MAX_DAILY_SIGNALS     = 6    # har juftlik + har rejim uchun (Intraday va Swing alohida hisoblanadi)
+CHECK_INTERVAL        = 12   # daqiqa (server yukini kamaytirish uchun oshirildi)
+MAX_DAILY_SIGNALS     = 2    # har juftlik + har rejim uchun (bitta aniq signal maqsadida kamaytirildi)
 TRADING_START         = 7    # UTC (London sessiyasi boshlanishi)
 TRADING_END           = 21   # UTC (NY sessiyasi tugashi)
 ASIA_SESSION_START    = 23   # UTC (Tokyo sessiyasi boshlanishi)
@@ -96,13 +92,9 @@ REQUIRE_CONFIRMATION  = True # Signal chiqqach 1 bar tasdiqlashini kutish
 PAIR_COUNTRY_MAP = {
     "EURUSD": {"EU", "US"},
     "GBPUSD": {"GB", "US"},
-    "XAUUSD": {"US"},
-    "XAGUSD": {"US"},
-    "USDCHF": {"US", "CH"},
-    "USDCAD": {"US", "CA"},
-    "EURCHF": {"EU", "CH"},
-    "AUDCHF": {"AU", "CH"},
     "AUDUSD": {"AU", "US"},
+    "USDJPY": {"US", "JP"},
+    "NZDUSD": {"NZ", "US"},
 }
 
 _news_cache = {"data": None, "updated": None}
@@ -974,9 +966,8 @@ def check_news(symbol: str) -> list:
 #  XABAR FORMATLASH
 # ══════════════════════════════════════════════
 SYMBOL_EMOJI = {
-    "XAUUSD":"🥇","XAGUSD":"🥈",
-    "EURUSD":"💶","GBPUSD":"💷","USDCHF":"🇨🇭","USDCAD":"🇨🇦",
-    "EURCHF":"💱","AUDCHF":"💱","AUDUSD":"🇦🇺"
+    "EURUSD":"💶","GBPUSD":"💷","AUDUSD":"🇦🇺",
+    "USDJPY":"🇯🇵","NZDUSD":"🇳🇿"
 }
 
 def fmt_signal(symbol,sig,news,remaining) -> str:
@@ -988,6 +979,9 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
     msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']} | {mode_label}\n"
          f"💰 `{sig['price']}`  🎯TP1 `{sig['tp1']}`  🛡SL `{sig['sl']}`\n"
          f"⚖️R:R 1:{sig['rr']}  ⭐{sig['score']}/30  🕐{now}\n")
+
+    if sig["score"] >= STRONG_SIGNAL_OVERRIDE_SCORE:
+        msg += "🔥 _Juda kuchli signal — cooldown chetlab o'tildi!_\n"
 
     pz = sig.get("pd_zone")
     zone_bits = []
@@ -1066,17 +1060,32 @@ def get_current_session_name(now: datetime) -> str:
         return "🇯🇵 Osiyo (Tokyo)"
     return "😴 Tinch vaqt"
 
-def can_signal(symbol,now) -> bool:
+SIGNAL_COOLDOWN_MINUTES = 120  # Bir juftlik uchun signal yuborilgach 2 soat kutiladi
+STRONG_SIGNAL_OVERRIDE_SCORE = 16  # Shu balldan yuqori signal cooldownni chetlab o'tadi
+
+def can_signal(symbol,now,score=0) -> bool:
     today=now.strftime("%Y-%m-%d")
     if symbol not in _daily or _daily[symbol]["date"]!=today:
-        _daily[symbol]={"date":today,"count":0}
-    return _daily[symbol]["count"]<MAX_DAILY_SIGNALS
+        _daily[symbol]={"date":today,"count":0,"last_sent":None}
+    rec = _daily[symbol]
+    if rec["count"] >= MAX_DAILY_SIGNALS:
+        return False
+    # ── Cooldown: oxirgi signaldan keyin yetarli vaqt o'tmagan bo'lsa rad ──
+    # Bundan mustasno: agar signal JUDA KUCHLI bo'lsa (STRONG_SIGNAL_OVERRIDE_SCORE
+    # dan yuqori), cooldown chetlab o'tiladi — chunki bunday sifatli imkoniyatni
+    # shunchaki vaqt o'tmagani uchun yo'qotib yubormaslik kerak.
+    if rec.get("last_sent") is not None and score < STRONG_SIGNAL_OVERRIDE_SCORE:
+        elapsed_min = (now - rec["last_sent"]).total_seconds() / 60
+        if elapsed_min < SIGNAL_COOLDOWN_MINUTES:
+            return False
+    return True
 
 def reg_signal(symbol,now):
     today=now.strftime("%Y-%m-%d")
     if symbol not in _daily or _daily[symbol]["date"]!=today:
-        _daily[symbol]={"date":today,"count":0}
+        _daily[symbol]={"date":today,"count":0,"last_sent":None}
     _daily[symbol]["count"]+=1
+    _daily[symbol]["last_sent"]=now
 
 # Korrelyatsiyalashgan juftliklar — bittasi BUY, ikkinchisi SELL bersa,
 # ikkalasi ham bir xil AQSh dollari harakatidan kelib chiqqan bo'lishi mumkin,
@@ -1090,6 +1099,7 @@ async def update_signal_tracking(bot):
     bu botning HAQIQIY win-rate'ini beradi (taxmin emas).
     """
     price_cache = {}
+    now = datetime.now(timezone.utc)
     for sig in _tracked_signals:
         if sig["status"] != "open":
             continue
@@ -1106,21 +1116,31 @@ async def update_signal_tracking(bot):
         hit_tp1 = (d == "BUY" and price >= sig["tp1"]) or (d == "SELL" and price <= sig["tp1"])
         hit_sl  = (d == "BUY" and price <= sig["sl"])  or (d == "SELL" and price >= sig["sl"])
 
+        # Status DARHOL o'zgartiriladi (xabar yuborishdan oldin) — shu orqali
+        # agar funksiya biror sabab bilan tez orada yana chaqirilsa, bu
+        # signal endi "open" bo'lmagani uchun qayta ishlanmaydi va
+        # xabar TAKRORLANMAYDI.
+        result_msg = None
         if hit_tp2:
             sig["status"] = "tp2_hit"
             _stats["tp2_hit"] += 1; _stats["open"] -= 1
-            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
-                text=f"🎯🎯 *{symbol} [{sig['mode']}] — TP2 GA YETDI!* Signal to'liq yopildi.")
+            result_msg = f"🎯🎯 *{symbol} [{sig['mode']}] — TP2 GA YETDI!* Signal to'liq yopildi."
         elif hit_tp1:
             sig["status"] = "tp1_hit"
             _stats["tp1_hit"] += 1; _stats["open"] -= 1
-            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
-                text=f"🎯 *{symbol} [{sig['mode']}] — TP1 ga yetdi!* Foyda qayd etildi.")
+            result_msg = f"🎯 *{symbol} [{sig['mode']}] — TP1 ga yetdi!* Foyda qayd etildi."
         elif hit_sl:
             sig["status"] = "sl_hit"
             _stats["sl_hit"] += 1; _stats["open"] -= 1
-            await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown",
-                text=f"🛑 *{symbol} [{sig['mode']}] — SL ga yetdi.* Zarar qayd etildi.")
+            result_msg = f"🛑 *{symbol} [{sig['mode']}] — SL ga yetdi.* Zarar qayd etildi."
+
+        if result_msg:
+            sent = await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown", text=result_msg)
+            # Natija xabari ham 20 daqiqadan keyin avtomatik o'chiriladi
+            _sent_signal_msgs.append({
+                "chat_id": CHAT_ID, "message_id": sent.message_id,
+                "expire_at": now + pd.Timedelta(minutes=20),
+            })
 
     # Xotira tejash uchun 500 tadan ortiq bo'lsa eski yopiq signallarni tozalaymiz
     if len(_tracked_signals) > 500:
@@ -1134,7 +1154,7 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
     # Ochiq signallarni tekshirish (win-rate tracking)
     await update_signal_tracking(bot)
 
-    # EOD eslatmasi
+    # EOD eslatmasi + kunlik statistika hisoboti + reset
     if now.hour==EOD_REMINDER_HOUR and now.minute<CHECK_INTERVAL and today not in _eod_sent:
         _eod_sent.add(today)
         await bot.send_message(chat_id=CHAT_ID,parse_mode="Markdown",
@@ -1142,6 +1162,36 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                   "Ochiq pozitsiyalarni ko'rib chiqing.\n"
                   "Tunda spread kengayadi — yopish tavsiya etiladi.\n\n"
                   "₿ _Bitcoin savdosi davom etadi (24/7)_"))
+
+        # ── Kunlik statistika hisoboti ──
+        closed_today = _stats["tp1_hit"] + _stats["tp2_hit"] + _stats["sl_hit"]
+        if closed_today > 0:
+            win_rate = round((_stats["tp1_hit"] + _stats["tp2_hit"]) / closed_today * 100, 1)
+            report = (
+                f"📊 *KUNLIK HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
+                f"📨 Jami signal: `{_stats['total']}`\n"
+                f"🔒 Yopilgan: `{closed_today}`\n"
+                f"🔓 Ochiq qoldi: `{_stats['open']}`\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🎯 TP1: `{_stats['tp1_hit']}`  🎯🎯 TP2: `{_stats['tp2_hit']}`  🛑 SL: `{_stats['sl_hit']}`\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"✅ *Bugungi win-rate: {win_rate}%*\n\n"
+                f"_Statistika ertaga 0 dan boshlanadi._"
+            )
+        else:
+            report = (
+                f"📊 *KUNLIK HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
+                f"📨 Jami signal: `{_stats['total']}`\n"
+                f"⏳ Bugun yopilgan signal bo'lmadi.\n\n"
+                f"_Statistika ertaga 0 dan boshlanadi._"
+            )
+        await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown", text=report)
+
+        # ── Statistikani nolga tushirish (faqat ochiq signallar saqlanadi) ──
+        _stats["total"] = _stats["open"]
+        _stats["tp1_hit"] = 0
+        _stats["tp2_hit"] = 0
+        _stats["sl_hit"] = 0
 
     sentiment=get_sentiment()
     candidate_signals = []   # [(symbol, mode, sig, nl)] — confirmation'dan o'tgan signallar
@@ -1177,10 +1227,16 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
             htf=get_htf(symbol)
             killzone=get_ict_killzone(now)
 
+            # ── Kunlik limitni oldindan tekshirish (ball bilan bog'liq emas) ──
+            today=now.strftime("%Y-%m-%d")
+            if symbol not in _daily or _daily[symbol]["date"]!=today:
+                _daily[symbol]={"date":today,"count":0,"last_sent":None}
+            if _daily[symbol]["count"] >= MAX_DAILY_SIGNALS:
+                continue
+
             # ── Ikkala rejim: Scalping (5m) va Intraday (1h) ──
             for mode, period, interval in (("scalp","1d","5m"), ("intraday","1mo","1h")):
-                pending_key = f"{symbol}_{mode}"
-                if not can_signal(pending_key, now): continue
+                confirm_key = f"{symbol}_{mode}"  # Confirmation kutish ro'yxati uchun (mode bilan alohida)
 
                 df=get_price_data(symbol, period=period, interval=interval)
                 min_bars = 20 if mode == "scalp" else 60
@@ -1201,12 +1257,19 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                 sig=generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode,
                                      vwap_data,orb_data,mom_retest,round_num)
 
+                # ── Cooldown tekshiruvi (ball bilan) ──
+                # Signal hisoblangandan keyin tekshiramiz — agar u JUDA KUCHLI
+                # bo'lsa (STRONG_SIGNAL_OVERRIDE_SCORE dan yuqori), cooldown
+                # chetlab o'tiladi. Oddiy signal esa cooldown ichida bo'lsa rad etiladi.
+                if sig and not can_signal(symbol, now, sig["score"]):
+                    sig = None
+
                 # ── Confirmation mantiqi (har rejim uchun alohida) ──
                 # Intraday uchun 2 marta ketma-ket bir xil yo'nalishda signal
                 # kelishi kerak (shovqinni filtrlash uchun), Swing uchun 1 bar yetarli.
                 required_confirmations = 2 if mode == "scalp" else 1
                 if REQUIRE_CONFIRMATION:
-                    prev = _pending.get(pending_key)
+                    prev = _pending.get(confirm_key)
                     if sig:
                         if prev and prev["direction"] == sig["direction"]:
                             still_valid = (
@@ -1214,31 +1277,31 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                                 (sig["direction"]=="SELL" and sig["price"] <= prev["price"])
                             )
                             if not still_valid:
-                                del _pending[pending_key]
+                                del _pending[confirm_key]
                                 sig = None
                             elif prev["count"] + 1 >= required_confirmations:
-                                del _pending[pending_key]
+                                del _pending[confirm_key]
                                 # sig tayyor — yuboriladi
                             else:
-                                _pending[pending_key] = {"direction": sig["direction"],
+                                _pending[confirm_key] = {"direction": sig["direction"],
                                                           "price": sig["price"],
                                                           "count": prev["count"] + 1}
                                 sig = None
                         else:
-                            _pending[pending_key] = {"direction": sig["direction"],
+                            _pending[confirm_key] = {"direction": sig["direction"],
                                                       "price": sig["price"], "count": 1}
                             sig = None if required_confirmations > 1 else sig
                             if sig:
-                                _pending.pop(pending_key, None)
+                                _pending.pop(confirm_key, None)
                     else:
-                        _pending.pop(pending_key, None)
+                        _pending.pop(confirm_key, None)
 
                 # ── Scalping: Multi-Timeframe Confluence (5m+15m+1H) ──
-                # Ikkala rejim uchun ham qo'llaniladi: signal faqat kamida
+                # FAQAT Scalp rejimi uchun qo'llaniladi — signal faqat kamida
                 # 2/3 timeframe bir xil yo'nalishni ko'rsatsagina o'tadi.
-                # Bu shovqinni maksimal darajada filtrlaydi va eng aniq
-                # kirish nuqtasini beradi.
-                if sig:
+                # Intraday o'zining 1H+4H Top-Down filtriga tayanadi, unga
+                # yana 5m confluence qo'shish ortiqcha qattiqlashtiradi.
+                if sig and mode == "scalp":
                     conf = get_scalp_confluence(symbol, sig["direction"])
                     if not conf["confirmed"]:
                         sig["reasons"].append(
@@ -1270,11 +1333,14 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
                     rejected.add((a, mode)); rejected.add((b, mode))
                     log.info(f"Correlation filtri ({mode}): {a} va {b} bir xil yo'nalishda — rad etildi")
 
+    already_sent_symbols = set()
     for symbol, mode, sig, nl in candidate_signals:
         if (symbol, mode) in rejected: continue
-        pending_key = f"{symbol}_{mode}"
-        reg_signal(pending_key, now)
-        rem = MAX_DAILY_SIGNALS - _daily[pending_key]["count"]
+        if symbol in already_sent_symbols:
+            continue  # Shu tsiklda bu juftlik uchun allaqachon signal yuborildi
+        already_sent_symbols.add(symbol)
+        reg_signal(symbol, now)  # Symbol darajasida — 2 soatlik cooldown shu yerdan boshlanadi
+        rem = MAX_DAILY_SIGNALS - _daily[symbol]["count"]
         msg = fmt_signal(symbol, sig, nl, rem)
         sent = await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
         # Muddati o'tganda avtomatik o'chirish uchun ro'yxatga qo'shamiz.
@@ -1315,17 +1381,13 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v16.0 (+Asia Session)*\n\n"
+        "👋 *UltimateForexSignalBot v23.0 (Strong Signal Override)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
-        "  🥇 XAUUSD — Oltin\n"
-        "  🥈 XAGUSD — Kumush\n"
         "  💶 EURUSD — Euro/Dollar\n"
         "  💷 GBPUSD — Funt/Dollar\n"
-        "  🇨🇭 USDCHF — Dollar/Frank\n"
-        "  🇨🇦 USDCAD — Dollar/Kanada\n"
-        "  💱 EURCHF — Euro/Frank\n"
-        "  💱 AUDCHF — Avstraliya/Frank\n"
-        "  🇦🇺 AUDUSD — Avstraliya/Dollar\n\n"
+        "  🇦🇺 AUDUSD — Avstraliya/Dollar\n"
+        "  🇯🇵 USDJPY — Dollar/Yena\n"
+        "  🇳🇿 NZDUSD — Yangi Zelandiya/Dollar\n\n"
         "🧠 *Strategiya:* ICT / Smart Money Concepts\n"
         "  • Imbalans (Fair Value Gap)\n"
         "  • Order Blocks\n"
@@ -1337,6 +1399,8 @@ async def cmd_start(update,context):
         f"⚙️ Tekshirish: har {CHECK_INTERVAL} daqiqa\n"
         f"⏰ Sessiya: London+NY ({TRADING_START}:00–{TRADING_END}:00) + 🇯🇵 Osiyo ({ASIA_SESSION_START}:00–{ASIA_SESSION_END}:00) UTC\n"
         f"📅 Kunlik limit: {MAX_DAILY_SIGNALS} ta/aktiv\n"
+        f"⏳ Har juftlik uchun 1 ta signal, {SIGNAL_COOLDOWN_MINUTES//60} soat cooldown\n"
+        f"🔥 Juda kuchli signal ({STRONG_SIGNAL_OVERRIDE_SCORE}+/30) cooldownni chetlab o'tadi\n"
         f"🎯 Rejim: SCALPING (5m) + INTRADAY (1H) — birga ishlaydi\n"
         f"🧹 Signallar 30 daqiqadan keyin avtomatik o'chiriladi\n\n"
         "📋 *Komandalar:*\n"
@@ -1344,8 +1408,8 @@ async def cmd_start(update,context):
         "/status — Joriy narxlar\n"
         "/news — Yangiliklar\n"
         "/sentiment — Bozor kayfiyati\n"
-        "/sr XAUUSD — Support/Resistance\n"
-        "/fib XAUUSD — Fibonacci\n"
+        "/sr EURUSD — Support/Resistance\n"
+        "/fib EURUSD — Fibonacci\n"
         "/stats — Haqiqiy win-rate statistikasi\n",
         parse_mode="Markdown"
     )
@@ -1385,19 +1449,20 @@ async def cmd_signal(update,context):
             sig=generate_signal(sym,ind,pat,sr,fib,vol,sentiment,htf,trend,smc,pd_zone,killzone,mode,
                                  vwap_data,orb_data,mom_retest,round_num)
             if sig:
-                conf = get_scalp_confluence(sym, sig["direction"])
-                sig["reasons"].append(
-                    ("✅" if conf["confirmed"] else "⏸") +
-                    f" Multi-TF confluence: {conf['detail']}"
-                )
-                if not conf["confirmed"]:
-                    continue  # tasdiqlanmagan signalni /signal'da ham ko'rsatmaymiz
+                if mode == "scalp":
+                    conf = get_scalp_confluence(sym, sig["direction"])
+                    sig["reasons"].append(
+                        ("✅" if conf["confirmed"] else "⏸") +
+                        f" Multi-TF confluence: {conf['detail']}"
+                    )
+                    if not conf["confirmed"]:
+                        continue  # tasdiqlanmagan scalp signalni ko'rsatmaymiz
                 found+=1
                 msg=fmt_signal(sym,sig,check_news(sym),MAX_DAILY_SIGNALS)
                 msg += "\n\n⚠️ _Bu /signal buyrug'i — darhol natija. Avtomatik signal qo'shimcha confirmation bar bilan keladi._"
                 await update.message.reply_text(msg,parse_mode="Markdown")
     if not found:
-        await update.message.reply_text("⏸ Hozircha kuchli signal yo'q (na Intraday, na Swing).")
+        await update.message.reply_text("⏸ Hozircha kuchli signal yo'q (na Scalp, na Intraday).")
 
 async def cmd_news(update,context):
     now=datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1438,7 +1503,7 @@ async def cmd_sentiment(update,context):
     )
 
 async def cmd_sr(update,context):
-    sym=(context.args[0].upper() if context.args else "XAUUSD")
+    sym=(context.args[0].upper() if context.args else "EURUSD")
     df=get_price_data(sym)
     if df is None:
         await update.message.reply_text(f"❌ {sym} ma'lumot olib bo'lmadi"); return
@@ -1452,7 +1517,7 @@ async def cmd_sr(update,context):
     await update.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_fib(update,context):
-    sym=(context.args[0].upper() if context.args else "XAUUSD")
+    sym=(context.args[0].upper() if context.args else "EURUSD")
     df=get_price_data(sym)
     if df is None:
         await update.message.reply_text(f"❌ {sym} ma'lumot olib bo'lmadi"); return
@@ -1493,9 +1558,9 @@ async def cmd_stats(update,context):
         f"🛑 SL ga yetdi: `{s['sl_hit']}`\n"
         f"━━━━━━━━━━━━━━━━\n"
         f"✅ *Win-rate: {win_rate}%*\n\n"
-        f"_Bu ko'rsatkich bot ishga tushgandan beri kuzatilgan real "
-        f"natija, taxmin emas. Server qayta ishga tushsa (masalan "
-        f"deploy paytida), bu statistika 0 dan boshlanadi._"
+        f"_Bu ko'rsatkich bugungi kun uchun (har kuni soat "
+        f"{EOD_REMINDER_HOUR}:00 UTC da avtomatik 0 dan boshlanadi va "
+        f"kunlik hisobot yuboriladi)._"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -1532,8 +1597,8 @@ async def _set_bot_commands(app):
         BotCommand("status",    "📊 Joriy narxlarni ko'rish"),
         BotCommand("news",      "📰 Yaqin yangiliklar"),
         BotCommand("sentiment", "🧠 Bozor kayfiyati (Fear & Greed)"),
-        BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr XAUUSD)"),
-        BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib XAUUSD)"),
+        BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr EURUSD)"),
+        BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib EURUSD)"),
         BotCommand("stats",     "📊 Botning haqiqiy win-rate statistikasi"),
     ]
     await app.bot.set_my_commands(commands)
@@ -1547,7 +1612,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v16.0 (+Asia Session) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v23.0 (Strong Signal Override) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
