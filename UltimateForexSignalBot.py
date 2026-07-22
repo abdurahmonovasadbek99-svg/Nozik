@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v23.0 (Strong Signal Override) — Telegram Signal Bot
+UltimateForexSignalBot v24.0 (EOD Force-Close) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: EURUSD, GBPUSD, AUDUSD, USDJPY, NZDUSD
 
@@ -1154,41 +1154,63 @@ async def check_and_send(context: ContextTypes.DEFAULT_TYPE):
     # Ochiq signallarni tekshirish (win-rate tracking)
     await update_signal_tracking(bot)
 
-    # EOD eslatmasi + kunlik statistika hisoboti + reset
+    # EOD eslatmasi + barcha ochiq sделkalarni yopish + kunlik hisobot + reset
     if now.hour==EOD_REMINDER_HOUR and now.minute<CHECK_INTERVAL and today not in _eod_sent:
         _eod_sent.add(today)
         await bot.send_message(chat_id=CHAT_ID,parse_mode="Markdown",
-            text=("🌙 *KUN OXIRI ESLATMASI*\n━━━━━━━━━━━━━━━━━━\n"
-                  "Ochiq pozitsiyalarni ko'rib chiqing.\n"
-                  "Tunda spread kengayadi — yopish tavsiya etiladi.\n\n"
-                  "₿ _Bitcoin savdosi davom etadi (24/7)_"))
+            text=("🌙 *KUN OXIRI — BARCHA SDELKALAR YOPILMOQDA*\n━━━━━━━━━━━━━━━━━━\n"
+                  "Ochiq pozitsiyalar joriy narx bo'yicha yakunlanadi.\n"
+                  "Tunda spread kengayadi — shuning uchun kun yakunida hisob-kitob qilinadi."))
 
-        # ── Kunlik statistika hisoboti ──
+        # ── Barcha OCHIQ signallarni joriy narx bo'yicha majburan yopish ──
+        price_cache_eod = {}
+        for sig in _tracked_signals:
+            if sig["status"] != "open":
+                continue
+            symbol = sig["symbol"]
+            if symbol not in price_cache_eod:
+                df = get_price_data(symbol, "1d", "5m")
+                price_cache_eod[symbol] = df["close"].iloc[-1] if df is not None and len(df) > 0 else None
+            price = price_cache_eod[symbol]
+            if price is None:
+                continue
+
+            d = sig["direction"]
+            profit = (price - sig["entry"]) if d == "BUY" else (sig["entry"] - price)
+            if profit > 0:
+                sig["status"] = "eod_profit"
+                _stats["tp1_hit"] += 1
+            else:
+                sig["status"] = "eod_loss"
+                _stats["sl_hit"] += 1
+            _stats["open"] -= 1
+
+        # ── Kunlik statistika hisoboti (endi barcha sделka yopilgan holda) ──
         closed_today = _stats["tp1_hit"] + _stats["tp2_hit"] + _stats["sl_hit"]
         if closed_today > 0:
             win_rate = round((_stats["tp1_hit"] + _stats["tp2_hit"]) / closed_today * 100, 1)
             report = (
-                f"📊 *KUNLIK HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
+                f"📊 *KUNLIK YAKUNIY HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
                 f"📨 Jami signal: `{_stats['total']}`\n"
-                f"🔒 Yopilgan: `{closed_today}`\n"
-                f"🔓 Ochiq qoldi: `{_stats['open']}`\n"
+                f"🔒 Barchasi yopildi: `{closed_today}`\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🎯 TP1: `{_stats['tp1_hit']}`  🎯🎯 TP2: `{_stats['tp2_hit']}`  🛑 SL: `{_stats['sl_hit']}`\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"✅ *Bugungi win-rate: {win_rate}%*\n\n"
-                f"_Statistika ertaga 0 dan boshlanadi._"
+                f"✅ *Bugungi yakuniy win-rate: {win_rate}%*\n\n"
+                f"_Ertaga statistika 0 dan boshlanadi._"
             )
         else:
             report = (
-                f"📊 *KUNLIK HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
+                f"📊 *KUNLIK YAKUNIY HISOBOT*\n━━━━━━━━━━━━━━━━━━\n"
                 f"📨 Jami signal: `{_stats['total']}`\n"
-                f"⏳ Bugun yopilgan signal bo'lmadi.\n\n"
-                f"_Statistika ertaga 0 dan boshlanadi._"
+                f"⏳ Bugun signal bo'lmadi.\n\n"
+                f"_Ertaga statistika 0 dan boshlanadi._"
             )
         await bot.send_message(chat_id=CHAT_ID, parse_mode="Markdown", text=report)
 
-        # ── Statistikani nolga tushirish (faqat ochiq signallar saqlanadi) ──
-        _stats["total"] = _stats["open"]
+        # ── Statistikani to'liq nolga tushirish (barchasi yopilgani uchun ochiq qolmaydi) ──
+        _stats["total"] = 0
+        _stats["open"] = 0
         _stats["tp1_hit"] = 0
         _stats["tp2_hit"] = 0
         _stats["sl_hit"] = 0
@@ -1381,7 +1403,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v23.0 (Strong Signal Override)*\n\n"
+        "👋 *UltimateForexSignalBot v24.0 (EOD Force-Close)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  💶 EURUSD — Euro/Dollar\n"
         "  💷 GBPUSD — Funt/Dollar\n"
@@ -1612,7 +1634,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v23.0 (Strong Signal Override) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v24.0 (EOD Force-Close) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
