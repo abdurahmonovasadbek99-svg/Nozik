@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v24.0 (EOD Force-Close) — Telegram Signal Bot
+UltimateForexSignalBot v25.0 (CHoCH Fix) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: EURUSD, GBPUSD, AUDUSD, USDJPY, NZDUSD
 
@@ -565,16 +565,20 @@ def calc_smc(df: pd.DataFrame, lookback: int = 50) -> dict:
         if price < last_low:
             result["bos_bearish"] = True
 
-    # CHoCH (Change of Character) — trend YO'NALISHI o'zgarganini bildiradi
-    # (oldingi ikkita swing solishtiriladi: pastga ketayotgan trendda birinchi
-    #  yuqoriga sinish CHoCH hisoblanadi va aksincha)
+    # CHoCH (Change of Character) — trend YO'NALISHI o'zgarganini bildiradi.
+    # Bullish CHoCH: trend PASTGA ketayotgan edi (pastki nuqtalar pasayib
+    # bormoqda), keyin narx BIRINCHI MARTA oldingi swing high'ni sindirsa —
+    # bu pastga trendning tugab, yuqoriga o'zgarganini bildiradi.
     if len(swing_lo_idx) >= 2:
         prev_lo, cur_lo = l[swing_lo_idx[-2]], l[swing_lo_idx[-1]]
-        if cur_lo > prev_lo and len(swing_hi_idx) >= 1 and price > h[swing_hi_idx[-1]]:
+        if cur_lo < prev_lo and len(swing_hi_idx) >= 1 and price > h[swing_hi_idx[-1]]:
             result["choch_bullish"] = True
+    # Bearish CHoCH: trend YUQORIGA ketayotgan edi (yuqori nuqtalar
+    # ko'tarilib bormoqda), keyin narx BIRINCHI MARTA oldingi swing low'ni
+    # sindirsa — bu yuqoriga trendning tugab, pastga o'zgarganini bildiradi.
     if len(swing_hi_idx) >= 2:
         prev_hi, cur_hi = h[swing_hi_idx[-2]], h[swing_hi_idx[-1]]
-        if cur_hi < prev_hi and len(swing_lo_idx) >= 1 and price < l[swing_lo_idx[-1]]:
+        if cur_hi > prev_hi and len(swing_lo_idx) >= 1 and price < l[swing_lo_idx[-1]]:
             result["choch_bearish"] = True
 
     # ── Liquidity zones (deyarli teng yuqori/past nuqtalar) ──
@@ -761,12 +765,6 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
             S+=2; R.append(f"💎 Premium zonada ({pd_zone['pct_in_range']}%) — SELL qulay")
             B = max(0, B-2)
 
-    # 3. ICT Killzone — institutsional faollik vaqti
-    if killzone:
-        B_before, S_before = B, S
-        if B > 0 or S > 0:
-            B = int(B*1.3); S = int(S*1.3)
-            R.append(f"⏰ ICT Killzone: {killzone} (yuqori faollik vaqti)")
 
     # 6. ADX
     if adx<20:
@@ -797,9 +795,16 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
         R.append("➖ Doji — bozor ikkilanmoqda")
 
     # 8. Fibonacci
+    # 8. Fibonacci retracement — trend yo'nalishi bilan birga ishlaydi.
+    # Agar umumiy trend YUQORIGA (EMA asosida) bo'lsa va narx Fib darajasiga
+    # (masalan 0.5, 0.618) pastdan qaytib kelgan bo'lsa — bu klassik "buy the
+    # dip" imkoniyati. Aksincha trend PASTGA bo'lsa va narx Fib darajasiga
+    # yuqoridan qaytgan bo'lsa — "sell the rally" imkoniyati.
     if fib["near"] and fib["near_type"] in ("0.382","0.500","0.618"):
-        if B>S: B+=2; R.append(f"📐 Fib {fib['near_type']}: {fib['near']}")
-        else:   S+=2; R.append(f"📐 Fib {fib['near_type']}: {fib['near']}")
+        if ind["e10"] > ind["e50"]:
+            B+=2; R.append(f"📐 Fib {fib['near_type']} qaytish (trend yuqori): {fib['near']}")
+        elif ind["e10"] < ind["e50"]:
+            S+=2; R.append(f"📐 Fib {fib['near_type']} qaytish (trend past): {fib['near']}")
 
     # 9. S/R
     if sr["at_support"]:    B+=2; R.append(f"🧱 Support: {sr['support']}")
@@ -813,13 +818,13 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
         B=max(0,B-1); S=max(0,S-1)
         R.append(f"📊 Past volume: {vol['ratio']}x ⚠️")
 
-    # 11. Sentiment
+    # 11. Sentiment — DIQQAT: bu AQSh aksiya bozori ko'rsatkichi (S&P 500),
+    # forex juftliklariga bilvosita ta'sir qiladi, shuning uchun ball og'irligi
+    # pasaytirilgan (endi faqat ozgina qo'shimcha ta'sir, hal qiluvchi emas).
     fg=sentiment["score"]
-    if sentiment["extreme_fear"]:  B+=2; R.append(f"😱 Extreme Fear ({fg}) — BUY imkoniyati")
-    elif sentiment["fear"]:        B+=1; R.append(f"😨 Fear ({fg})")
-    elif sentiment["extreme_greed"]: S+=2; R.append(f"🤑 Extreme Greed ({fg}) — SELL imkoniyati")
-    elif sentiment["greed"]:       S+=1; R.append(f"😏 Greed ({fg})")
-    else:                          R.append(f"😐 Neytral ({fg})")
+    if sentiment["extreme_fear"]:  B+=1; R.append(f"😱 Extreme Fear ({fg})")
+    elif sentiment["extreme_greed"]: S+=1; R.append(f"🤑 Extreme Greed ({fg})")
+    else:                          R.append(f"😐 Sentiment: {fg}")
 
     # 12. HTF (Top-Down Analysis) — Scalping uchun QATTIQ filtr
     if mode == "scalp":
@@ -1403,7 +1408,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v24.0 (EOD Force-Close)*\n\n"
+        "👋 *UltimateForexSignalBot v25.0 (CHoCH Fix)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  💶 EURUSD — Euro/Dollar\n"
         "  💷 GBPUSD — Funt/Dollar\n"
@@ -1634,7 +1639,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v24.0 (EOD Force-Close) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v25.0 (CHoCH Fix) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
