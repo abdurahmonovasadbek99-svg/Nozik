@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-UltimateForexSignalBot v26.0 (Full Logic Audit) — Telegram Signal Bot
+UltimateForexSignalBot v27.0 (Precise Entry) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: EURUSD, GBPUSD, AUDUSD, USDJPY, NZDUSD
 
@@ -954,8 +954,34 @@ def generate_signal(symbol,ind,pat,sr,fib,vol,sentiment,htf,trend=None,smc=None,
     strength=("🔥🔥 ULTRA" if score>=14 else "🔥 JUDA KUCHLI" if score>=10
               else "✅ KUCHLI" if score>=7 else "🟡 O'RTA")
 
+    # ── ENTRY ZONE — bitta narx o'rniga oralig' ──
+    # ATR asosida narx atrofida "qulay kirish zonasi" hisoblanadi — bozor
+    # spread/shovqin tufayli bitta aniq narxga tushish shart emasligini bildiradi.
+    entry_buffer = atr * 0.25
+    if direction == "BUY":
+        entry_low, entry_high = round(p - entry_buffer, 5), round(p, 5)
+    else:
+        entry_low, entry_high = round(p, 5), round(p + entry_buffer, 5)
+
+    # ── LIMIT ORDER TAKLIFI ──
+    # Agar narx allaqachon impulsiv harakat qilgan bo'lsa (ADX yuqori),
+    # darhol bozor narxida kirish o'rniga, kichik pullback kutib, arzonroq
+    # (yoki qimmatroq, SELL uchun) narxda limit order qo'yishni tavsiya qilamiz.
+    limit_price = None
+    if adx >= 25:  # kuchli trend — pullback kutish mantiqli
+        pullback = atr * 0.4
+        limit_price = round(p - pullback, 5) if direction == "BUY" else round(p + pullback, 5)
+
+    # ── INVALIDATION DARAJASI ──
+    # Signal "bekor" hisoblanadigan chegara — SL'dan biroz kattaroq masofa,
+    # chunki bu yerga yetgach signalning asosiy g'oyasi (masalan Order Block,
+    # trend) o'zi buzilgan bo'ladi, hatto SL urilmagan bo'lsa ham ehtiyot bo'lish kerak.
+    invalidation = round(sl - atr*0.3, 5) if direction == "BUY" else round(sl + atr*0.3, 5)
+
     return {"direction":direction,"strength":strength,"score":score,"mode":mode,
             "price":p,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":rr,
+            "entry_low":entry_low,"entry_high":entry_high,
+            "limit_price":limit_price,"invalidation":invalidation,
             "adx":adx,"atr":atr,"pd_zone":pd_zone,"killzone":killzone,
             "reasons":R,"sr":sr,"fib":fib,"sentiment":sentiment}
 
@@ -990,8 +1016,15 @@ def fmt_signal(symbol,sig,news,remaining) -> str:
     mode_label = "⚡ Scalp" if sig.get("mode")=="scalp" else "📊 Intraday"
 
     msg=(f"{se} {de} *{symbol} — {sig['direction']}* {sig['strength']} | {mode_label}\n"
-         f"💰 `{sig['price']}`  🎯TP1 `{sig['tp1']}`  🛡SL `{sig['sl']}`\n"
+         f"📍 Entry: `{sig['entry_low']}–{sig['entry_high']}`\n"
+         f"🎯TP1 `{sig['tp1']}`  🛡SL `{sig['sl']}`\n"
          f"⚖️R:R 1:{sig['rr']}  ⭐{sig['score']}/30  🕐{now}\n")
+
+    if sig.get("limit_price"):
+        lo = "pastroq" if sig["direction"]=="BUY" else "yuqoriroq"
+        msg += f"⏳ Limit order taklifi: `{sig['limit_price']}` ({lo} pullback kutish)\n"
+
+    msg += f"❌ Invalidation: `{sig['invalidation']}` (bu darajadan o'tsa g'oya bekor)\n"
 
     if sig["score"] >= STRONG_SIGNAL_OVERRIDE_SCORE:
         msg += "🔥 _Juda kuchli signal — cooldown chetlab o'tildi!_\n"
@@ -1416,7 +1449,7 @@ async def cmd_start(update,context):
     except Exception as e:
         log.error(f"Komandalar menyusi xatosi: {e}")
     await update.message.reply_text(
-        "👋 *UltimateForexSignalBot v26.0 (Full Logic Audit)*\n\n"
+        "👋 *UltimateForexSignalBot v27.0 (Precise Entry)*\n\n"
         "📊 *Kuzatiladigan aktivlar:*\n"
         "  💶 EURUSD — Euro/Dollar\n"
         "  💷 GBPUSD — Funt/Dollar\n"
@@ -1647,7 +1680,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
-    log.info(f"UltimateForexSignalBot v26.0 (Full Logic Audit) ishga tushdi!")
+    log.info(f"UltimateForexSignalBot v27.0 (Precise Entry) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
