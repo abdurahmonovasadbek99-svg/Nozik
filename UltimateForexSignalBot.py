@@ -1656,6 +1656,23 @@ def start_fake_server():
     except Exception as e:
         log.error(f"❌ Soxta server xatosi: {e}")
 
+# ══════════════════════════════════════════════
+#  O'Z-O'ZIGA PING (Render'ni uxlab qolishdan saqlaydi)
+# ══════════════════════════════════════════════
+# Render har bir servisga o'zining tashqi manzilini RENDER_EXTERNAL_URL
+# muhit o'zgaruvchisiga avtomatik joylaydi (masalan https://nozik-1.onrender.com)
+SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+
+async def self_ping(context: ContextTypes.DEFAULT_TYPE):
+    """Botning o'zi o'ziga HTTP so'rov yuborib, Render instance'ni uyg'oq ushlab turadi."""
+    if not SELF_URL:
+        return
+    try:
+        r = requests.get(SELF_URL, timeout=20)
+        log.info(f"🔄 Self-ping: {r.status_code}")
+    except Exception as e:
+        log.warning(f"⚠️ Self-ping xatosi: {e}")
+
 async def _set_bot_commands(app):
     """Telegram '/' menyusiga barcha komandalarni tavsif bilan o'rnatadi"""
     from telegram import BotCommand
@@ -1680,6 +1697,7 @@ def main():
                    ("stats",cmd_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
+    app.job_queue.run_repeating(self_ping,interval=600,first=60)  # har 10 daqiqada o'z-o'ziga ping
     log.info(f"UltimateForexSignalBot v27.0 (Precise Entry) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
