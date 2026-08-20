@@ -43,6 +43,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 import requests, pandas as pd, ta
 from telegram.ext import Application, CommandHandler, ContextTypes
+from pump_screener.handlers import (
+    cmd_pump, cmd_pump_on, cmd_pump_off, cmd_pump_stats,
+    pump_watcher_job, outcome_evaluator_job, pump_db_init,
+)
+import pump_screener.config as pump_config
 
 # MUHIM: python-telegram-bot[job-queue] o'rnatilishi kerak, aks holda
 # job_queue = None bo'lib qoladi va run_repeating xato beradi.
@@ -1685,19 +1690,27 @@ async def _set_bot_commands(app):
         BotCommand("sr",        "🧱 Support/Resistance (masalan: /sr EURUSD)"),
         BotCommand("fib",       "📐 Fibonacci darajalari (masalan: /fib EURUSD)"),
         BotCommand("stats",     "📊 Botning haqiqiy win-rate statistikasi"),
+        BotCommand("pump",      "🚀 Pump/Dump screener (Bybit fyuchers)"),
+        BotCommand("pump_on",   "🔔 Avtomatik pump alertlarni yoqish"),
+        BotCommand("pump_off",  "🔕 Avtomatik pump alertlarni o'chirish"),
+        BotCommand("pump_stats","📈 Pump screener aniqlik statistikasi"),
     ]
     await app.bot.set_my_commands(commands)
     log.info("✅ Bot komandalar menyusi o'rnatildi")
 
 def main():
-    app=Application.builder().token(BOT_TOKEN).build()
+    app=Application.builder().token(BOT_TOKEN).post_init(pump_db_init).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),
                    ("signal",cmd_signal),("news",cmd_news),
                    ("sentiment",cmd_sentiment),("sr",cmd_sr),("fib",cmd_fib),
-                   ("stats",cmd_stats)]:
+                   ("stats",cmd_stats),
+                   ("pump",cmd_pump),("pump_on",cmd_pump_on),
+                   ("pump_off",cmd_pump_off),("pump_stats",cmd_pump_stats)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.job_queue.run_repeating(check_and_send,interval=CHECK_INTERVAL*60,first=15)
     app.job_queue.run_repeating(self_ping,interval=600,first=60)  # har 10 daqiqada o'z-o'ziga ping
+    app.job_queue.run_repeating(pump_watcher_job, interval=pump_config.SCAN_INTERVAL_SECONDS, first=90)
+    app.job_queue.run_repeating(outcome_evaluator_job, interval=120, first=120)
     log.info(f"UltimateForexSignalBot v27.0 (Precise Entry) ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
 
