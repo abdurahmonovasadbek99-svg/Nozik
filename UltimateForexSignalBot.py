@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""
+"""from nasos_screener.handlers import (
+    cmd_pump, cmd_pump_on, cmd_pump_off, cmd_pump_stats,
+    pump_watcher_job, outcome_evaluator_job, pump_db_init,
+)
+import nasos_screener.config as pump_config
+
 UltimateForexSignalBot v27.0 (Precise Entry) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
 Juftliklar: EURUSD, GBPUSD, AUDUSD, USDJPY, NZDUSD
