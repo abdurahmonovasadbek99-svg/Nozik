@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""from nasos_screener.handlers import (
-    cmd_pump, cmd_pump_on, cmd_pump_off, cmd_pump_stats,
-    pump_watcher_job, outcome_evaluator_job, pump_db_init,
-)
-import nasos_screener.config as pump_config
+"""
 
 UltimateForexSignalBot v27.0 (Precise Entry) — Telegram Signal Bot
 ═══════════════════════════════════════════════════
@@ -48,11 +44,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone
 import requests, pandas as pd, ta
 from telegram.ext import Application, CommandHandler, ContextTypes
-from pump_screener.handlers import (
+from nasos_screener.handlers import (
     cmd_pump, cmd_pump_on, cmd_pump_off, cmd_pump_stats,
     pump_watcher_job, outcome_evaluator_job, pump_db_init,
 )
-import pump_screener.config as pump_config
+import nasos_screener.config as pump_config
 
 # MUHIM: python-telegram-bot[job-queue] o'rnatilishi kerak, aks holda
 # job_queue = None bo'lib qoladi va run_repeating xato beradi.
