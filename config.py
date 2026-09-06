@@ -43,3 +43,5 @@ DB_PATH = os.environ.get("DB_PATH", "nozik.db")
 
 # --- Health check server porti (Render uchun) ---
 PORT = int(os.environ.get("PORT", "10000"))
+# --- O'z-o'ziga ping yuborish uchun (Render'ni uxlab qolishdan saqlaydi) ---
+SELF_URL = os.environ.get("SELF_URL", "")
