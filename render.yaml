@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: nozik-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot.py"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ADMIN_CHAT_IDS
+        sync: false
+      - key: BYBIT_API_KEY
+        sync: false
+      - key: BYBIT_API_SECRET
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: WHALE_ALERT_API_KEY
+        sync: false
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      - key: LUNARCRUSH_API_KEY
+        sync: false
+      - key: WATCHLIST
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
+      - key: ALERT_THRESHOLD
+        value: "65"
+      - key: SCAN_INTERVAL_SECONDS
+        value: "300"
