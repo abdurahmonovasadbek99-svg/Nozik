@@ -6,12 +6,13 @@ bu fayl faqat Telegram bilan muloqot qatlami.
 import logging
 import threading
 import time
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN, ADMIN_CHAT_IDS, WATCHLIST, ALERT_THRESHOLD, SCAN_INTERVAL_SECONDS, PORT
+from config import TELEGRAM_BOT_TOKEN, ADMIN_CHAT_IDS, WATCHLIST, ALERT_THRESHOLD, SCAN_INTERVAL_SECONDS, PORT, SELF_URL
 from engine.aggregator import analyze_symbol, scan_watchlist
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats
 
@@ -21,13 +22,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("nozik")
 
-# Har bir symbol uchun so'nggi yuborilgan alert vaqtini eslab qolamiz
-# (bir xil signalni qayta-qayta yubormaslik uchun)
 _last_alert_time = {}
 ALERT_COOLDOWN_SECONDS = 3600
 
-
-# ---------- Telegram komandalar ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -81,8 +78,6 @@ async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👀 Kuzatilayotgan coinlar:\n" + ", ".join(WATCHLIST))
 
 
-# ---------- Background skanerlash (avtomatik signal yuborish) ----------
-
 async def background_scan(context: ContextTypes.DEFAULT_TYPE):
     """JobQueue orqali muntazam ishga tushadi."""
     results = scan_watchlist(WATCHLIST)
@@ -102,7 +97,6 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
 
         _last_alert_time[symbol] = now
 
-        # Narxni volume_oi signalidan olamiz (ict_smc detallaridan ham olish mumkin)
         price = r["signals"]["ict_smc"]["details"].get("order_block", {})
         price_value = price.get("high") if isinstance(price, dict) and price else 0
 
@@ -124,7 +118,16 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
 
 
-# ---------- Health check server (Render uchun) ----------
+async def self_ping(context: ContextTypes.DEFAULT_TYPE):
+    """Render'ni uxlab qolishdan saqlash uchun o'z-o'ziga so'rov yuboradi."""
+    if not SELF_URL:
+        return
+    try:
+        requests.get(SELF_URL, timeout=10)
+        logger.info("Self-ping muvaffaqiyatli")
+    except Exception as e:
+        logger.error(f"Self-ping xatosi: {e}")
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -133,15 +136,13 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        pass  # health-check loglarini bosib qo'yamiz
+        pass
 
 
 def run_health_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-
-# ---------- Asosiy ishga tushirish ----------
 
 def main():
     init_db()
@@ -157,6 +158,7 @@ def main():
     app.add_handler(CommandHandler("watchlist", cmd_watchlist))
 
     app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=10)
+    app.job_queue.run_repeating(self_ping, interval=600, first=60)
 
     logger.info("Nozik Bot v2 ishga tushdi.")
     app.run_polling()
@@ -164,3 +166,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
