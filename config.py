@@ -66,3 +66,5 @@ EVAL_CHECK_INTERVAL_SECONDS = int(os.environ.get("EVAL_CHECK_INTERVAL_SECONDS", 
 # --- Davriy hisobotlar (UTC bo'yicha soat, 0-23) ---
 DAILY_REPORT_HOUR_UTC = int(os.environ.get("DAILY_REPORT_HOUR_UTC", "6"))
 WEEKLY_REPORT_WEEKDAY = int(os.environ.get("WEEKLY_REPORT_WEEKDAY", "0"))  # 0=Dushanba
+# --- Health-check server porti (Render "web service" talabi uchun) ---
+PORT = int(os.environ.get("PORT", "10000"))
