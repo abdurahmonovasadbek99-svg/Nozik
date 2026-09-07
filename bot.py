@@ -24,10 +24,12 @@ from config import (
     EVAL_CHECK_INTERVAL_SECONDS,
     DAILY_REPORT_HOUR_UTC,
     WEEKLY_REPORT_WEEKDAY,
+    SELF_PING_INTERVAL_SECONDS,
 )
 from engine.aggregator import analyze_symbol, scan_watchlist
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats, get_stats_since
 from signals.universe import get_candidates, get_current_price
+from keepalive import self_ping
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -35,8 +37,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("nozik")
 
-# Har bir symbol uchun so'nggi yuborilgan alert vaqtini eslab qolamiz
-# (bir xil signalni qayta-qayta yubormaslik uchun)
 _last_alert_time = {}
 ALERT_COOLDOWN_SECONDS = 3600
 
@@ -48,8 +48,6 @@ MAIN_MENU = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-
-# ---------- Telegram komandalar ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -112,7 +110,6 @@ async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Pastdagi menyu tugmalari matn sifatida keladi, shu yerda mos buyruqqa yo'naltiramiz."""
     text = update.message.text
 
     if text == "🔍 Skanerlash":
@@ -176,23 +173,13 @@ async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def scheduled_evaluate(context: ContextTypes.DEFAULT_TYPE):
-    """Muddati o'tgan signallarni joriy narx bilan solishtirib baholaydi."""
     try:
         evaluate_pending(get_current_price, eval_after_seconds=EVAL_AFTER_SECONDS)
     except Exception as e:
         logger.error(f"Signallarni baholashda xato: {e}")
 
 
-# ---------- Background skanerlash (avtomatik signal yuborish) ----------
-
 async def background_scan(context: ContextTypes.DEFAULT_TYPE):
-    """
-    JobQueue orqali muntazam ishga tushadi.
-    Endi faqat WATCHLIST emas, butun bozor (universe.get_candidates)
-    skanerlanadi — shu tarzda kichik/alt tokenlardagi pump/dump'lar ham
-    ko'rinadi. Aniqlik uchun kamida MIN_SIGNAL_AGREEMENT ta modul bir xil
-    yo'nalishda rozi bo'lishi shart.
-    """
     candidates = get_candidates()
     results = scan_watchlist(candidates)
     now = time.time()
@@ -238,8 +225,6 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
 
 
-# ---------- Health check server (Render uchun) ----------
-
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -247,16 +232,13 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        pass  # health-check loglarini bosib qo'yamiz
+        pass
 
 
 def run_health_server():
-    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    logger.info(f"Health server {PORT}-portda ishga tushdi")
     server.serve_forever()
 
-# ---------- Asosiy ishga tushirish ----------
 
 async def _post_init(app: Application):
     await app.bot.set_my_commands([
@@ -268,14 +250,9 @@ async def _post_init(app: Application):
         BotCommand("watchlist", "Asosiy kuzatiladigan coinlar"),
     ])
 
+
 def main():
-    threading.Thread(target=run_health_server, daemon=True).start()
     init_db()
-
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
-    ...
-
-
 
     threading.Thread(target=run_health_server, daemon=True).start()
 
@@ -291,6 +268,7 @@ def main():
 
     app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=10)
     app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60)
+    app.job_queue.run_repeating(self_ping, interval=SELF_PING_INTERVAL_SECONDS, first=300)
     app.job_queue.run_daily(
         scheduled_daily_report,
         time=datetime.time(hour=DAILY_REPORT_HOUR_UTC, minute=0),
