@@ -73,11 +73,13 @@ def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> li
     """
     if max_candidates is None:
         max_candidates = MAX_CANDIDATES_PER_SCAN
-
     try:
         tickers = fetch_all_tickers()
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger("nozik.universe").error(f"Bybit tickers olishda xato, faqat WATCHLIST ishlatiladi: {e}")
         return list(dict.fromkeys((extra_symbols or []) + WATCHLIST))
+
 
     scored = []
     for t in tickers:
