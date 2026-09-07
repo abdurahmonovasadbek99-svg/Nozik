@@ -1,3 +1,8 @@
+"""
+Nozik Bot - Configuration
+Barcha maxfiy kalitlar Render.com Environment Variables orqali beriladi.
+Hech qachon kalitlarni kodga yozmang!
+"""
 import os
 
 # --- Telegram ---
@@ -41,7 +46,23 @@ SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
 # --- Ma'lumotlar bazasi fayli (signal tarixi/statistika uchun) ---
 DB_PATH = os.environ.get("DB_PATH", "nozik.db")
 
-# --- Health check server porti (Render uchun) ---
-PORT = int(os.environ.get("PORT", "10000"))
-# --- O'z-o'ziga ping yuborish uchun (Render'ni uxlab qolishdan saqlaydi) ---
-SELF_URL = os.environ.get("SELF_URL", "")
+# --- Universe / Prescreen (kichik tokenlarni ham skanerlash uchun) ---
+QUOTE_ASSET = os.environ.get("QUOTE_ASSET", "USDT")
+# Juda o'lik/illikvid coinlarni chetlab o'tish uchun minimal 24h aylanma (USDT)
+MIN_24H_TURNOVER_USDT = float(os.environ.get("MIN_24H_TURNOVER_USDT", "200000"))
+# Har skanerlashda to'liq confluence tahliliga yuboriladigan nomzodlar soni
+MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN", "40"))
+EXCLUDE_SYMBOLS = [
+    s.strip() for s in os.environ.get("EXCLUDE_SYMBOLS", "").split(",") if s.strip()
+]
+
+# --- Signal aniqligi: kamida nechta modul bir xil yo'nalishda rozi bo'lishi kerak ---
+MIN_SIGNAL_AGREEMENT = int(os.environ.get("MIN_SIGNAL_AGREEMENT", "2"))
+
+# --- Signalni qachon baholash (necha soniyadan keyin natijani tekshirish) ---
+EVAL_AFTER_SECONDS = int(os.environ.get("EVAL_AFTER_SECONDS", "3600"))
+EVAL_CHECK_INTERVAL_SECONDS = int(os.environ.get("EVAL_CHECK_INTERVAL_SECONDS", "900"))
+
+# --- Davriy hisobotlar (UTC bo'yicha soat, 0-23) ---
+DAILY_REPORT_HOUR_UTC = int(os.environ.get("DAILY_REPORT_HOUR_UTC", "6"))
+WEEKLY_REPORT_WEEKDAY = int(os.environ.get("WEEKLY_REPORT_WEEKDAY", "0"))  # 0=Dushanba
