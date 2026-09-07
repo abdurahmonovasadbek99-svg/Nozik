@@ -251,9 +251,10 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def run_health_server():
+    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    logger.info(f"Health server {PORT}-portda ishga tushdi")
     server.serve_forever()
-
 
 # ---------- Asosiy ishga tushirish ----------
 
@@ -267,9 +268,14 @@ async def _post_init(app: Application):
         BotCommand("watchlist", "Asosiy kuzatiladigan coinlar"),
     ])
 
-
 def main():
+    threading.Thread(target=run_health_server, daemon=True).start()
     init_db()
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
+    ...
+
+
 
     threading.Thread(target=run_health_server, daemon=True).start()
 
