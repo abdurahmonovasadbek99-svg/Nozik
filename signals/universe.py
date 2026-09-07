@@ -28,6 +28,18 @@ from config import (
 
 BYBIT_BASE = "https://api.bybit.com"
 
+# Ba'zi birjalar (jumladan Bybit) "bulut" serverlaridan (Render, AWS va h.k.)
+# kelayotgan, standart python-requests User-Agent bilan yuborilgan so'rovlarni
+# botga o'xshatib 403 Forbidden bilan bloklaydi. Brauzerga o'xshash sarlavha
+# qo'yish ko'pincha buni chetlab o'tadi.
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
 
 def fetch_all_tickers() -> list:
     """
@@ -35,7 +47,7 @@ def fetch_all_tickers() -> list:
     24 soatlik statistikani BITTA so'rovda qaytaradi.
     """
     url = f"{BYBIT_BASE}/v5/market/tickers"
-    r = requests.get(url, params={"category": "linear"}, timeout=15)
+    r = requests.get(url, params={"category": "linear"}, headers=_HEADERS, timeout=15)
     r.raise_for_status()
     return r.json()["result"]["list"]
 
@@ -55,31 +67,23 @@ def _activity_score(ticker: dict) -> float:
         return 0.0
 
     range_pct = ((high - low) / low * 100) if low > 0 else 0.0
-    # Ikkalasidan kattarog'ini olamiz: ba'zan 24h yopilish narxi tinch
-    # ko'rinsa-da, kun ichida keskin pump/dump bo'lib, orqaga qaytgan bo'ladi.
     return max(pct_change, range_pct)
 
 
 def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> list:
     """
-    Skanerlash uchun nomzod symbollar ro'yxatini qaytaradi:
-    - o'lik/illikvid coinlar chetlab o'tiladi (MIN_24H_TURNOVER_USDT)
-    - qolganlar "g'ayrioddiy faollik" bo'yicha saralanadi
-    - eng faol `max_candidates` tasi olinadi
-    - WATCHLIST / extra_symbols har doim ro'yxatga qo'shiladi (mavjud bo'lsa)
-
-    Bybit so'rovi ishlamasa (tarmoq xatosi va h.k.), WATCHLIST'ga qaytadi
-    (eski xatti-harakat) — bot butunlay to'xtab qolmasligi uchun.
+    Skanerlash uchun nomzod symbollar ro'yxatini qaytaradi.
+    Bybit so'rovi ishlamasa, WATCHLIST'ga qaytadi (bot to'xtab qolmasligi uchun).
     """
     if max_candidates is None:
         max_candidates = MAX_CANDIDATES_PER_SCAN
+
     try:
         tickers = fetch_all_tickers()
     except Exception as e:
         import logging
         logging.getLogger("nozik.universe").error(f"Bybit tickers olishda xato, faqat WATCHLIST ishlatiladi: {e}")
         return list(dict.fromkeys((extra_symbols or []) + WATCHLIST))
-
 
     scored = []
     for t in tickers:
@@ -99,7 +103,6 @@ def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> li
     scored.sort(key=lambda x: x[1], reverse=True)
     top_symbols = [s for s, _ in scored[:max_candidates]]
 
-    # Har doim asosiy watchlist + qo'lda berilgan qo'shimchalar kiritiladi
     always_include = (extra_symbols or []) + WATCHLIST
     final = list(dict.fromkeys(always_include + top_symbols))
     return final
@@ -108,7 +111,7 @@ def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> li
 def get_current_price(symbol: str) -> float:
     """Bitta symbol uchun joriy narxni qaytaradi (baholash/hisobot uchun)."""
     url = f"{BYBIT_BASE}/v5/market/tickers"
-    r = requests.get(url, params={"category": "linear", "symbol": symbol}, timeout=10)
+    r = requests.get(url, params={"category": "linear", "symbol": symbol}, headers=_HEADERS, timeout=10)
     r.raise_for_status()
     rows = r.json()["result"]["list"]
     if not rows:
