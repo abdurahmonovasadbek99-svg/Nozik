@@ -48,9 +48,7 @@ DB_PATH = os.environ.get("DB_PATH", "nozik.db")
 
 # --- Universe / Prescreen (kichik tokenlarni ham skanerlash uchun) ---
 QUOTE_ASSET = os.environ.get("QUOTE_ASSET", "USDT")
-# Juda o'lik/illikvid coinlarni chetlab o'tish uchun minimal 24h aylanma (USDT)
 MIN_24H_TURNOVER_USDT = float(os.environ.get("MIN_24H_TURNOVER_USDT", "200000"))
-# Har skanerlashda to'liq confluence tahliliga yuboriladigan nomzodlar soni
 MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN", "40"))
 EXCLUDE_SYMBOLS = [
     s.strip() for s in os.environ.get("EXCLUDE_SYMBOLS", "").split(",") if s.strip()
@@ -66,5 +64,13 @@ EVAL_CHECK_INTERVAL_SECONDS = int(os.environ.get("EVAL_CHECK_INTERVAL_SECONDS", 
 # --- Davriy hisobotlar (UTC bo'yicha soat, 0-23) ---
 DAILY_REPORT_HOUR_UTC = int(os.environ.get("DAILY_REPORT_HOUR_UTC", "6"))
 WEEKLY_REPORT_WEEKDAY = int(os.environ.get("WEEKLY_REPORT_WEEKDAY", "0"))  # 0=Dushanba
-# --- Health-check server porti (Render "web service" talabi uchun) ---
+
+# --- Health check server porti (Render uchun) ---
 PORT = int(os.environ.get("PORT", "10000"))
+
+# --- O'z-o'ziga ping (Render bepul tarifda 15 daqiqa harakatsizlikdan keyin
+# uxlab qolmasligi uchun). RENDER_EXTERNAL_URL ni Render "web service"
+# uchun avtomatik o'zi beradi (https://xxx.onrender.com) — qo'lda kiritish
+# shart emas.
+SELF_PING_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
+SELF_PING_INTERVAL_SECONDS = int(os.environ.get("SELF_PING_INTERVAL_SECONDS", "600"))
