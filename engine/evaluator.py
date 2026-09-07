@@ -100,3 +100,51 @@ def get_stats() -> dict:
         "pending": pending,
         "avg_pct_change": round(avg_pct, 2) if avg_pct else 0,
     }
+
+
+def get_stats_since(seconds_ago: int) -> dict:
+    """
+    get_stats() bilan bir xil, lekin faqat berilgan davr ichida (masalan
+    kunlik hisobot uchun 86400, haftalik uchun 604800) yuborilgan
+    signallar bo'yicha. Kunlik/haftalik avtomatik hisobotlar shu yerdan
+    ma'lumot oladi.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cutoff = int(time.time()) - seconds_ago
+
+    total_sent = conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE timestamp >= ?", (cutoff,)
+    ).fetchone()[0]
+    total_evaluated = conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE timestamp >= ? AND evaluated=1", (cutoff,)
+    ).fetchone()[0]
+    success = conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE timestamp >= ? AND evaluated=1 AND outcome='success'",
+        (cutoff,),
+    ).fetchone()[0]
+    avg_pct = conn.execute(
+        "SELECT AVG(pct_change) FROM signals WHERE timestamp >= ? AND evaluated=1",
+        (cutoff,),
+    ).fetchone()[0]
+    best = conn.execute(
+        "SELECT symbol, pct_change FROM signals WHERE timestamp >= ? AND evaluated=1 "
+        "ORDER BY pct_change DESC LIMIT 1",
+        (cutoff,),
+    ).fetchone()
+    worst = conn.execute(
+        "SELECT symbol, pct_change FROM signals WHERE timestamp >= ? AND evaluated=1 "
+        "ORDER BY pct_change ASC LIMIT 1",
+        (cutoff,),
+    ).fetchone()
+    conn.close()
+
+    accuracy = (success / total_evaluated * 100) if total_evaluated > 0 else 0
+    return {
+        "total_sent": total_sent,
+        "total_evaluated": total_evaluated,
+        "successful": success,
+        "accuracy_pct": round(accuracy, 1),
+        "avg_pct_change": round(avg_pct, 2) if avg_pct else 0,
+        "best": {"symbol": best[0], "pct_change": round(best[1], 2)} if best else None,
+        "worst": {"symbol": worst[0], "pct_change": round(worst[1], 2)} if worst else None,
+    }
