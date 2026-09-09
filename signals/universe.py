@@ -28,10 +28,6 @@ from config import (
 
 BYBIT_BASE = "https://api.bybit.com"
 
-# Ba'zi birjalar (jumladan Bybit) "bulut" serverlaridan (Render, AWS va h.k.)
-# kelayotgan, standart python-requests User-Agent bilan yuborilgan so'rovlarni
-# botga o'xshatib 403 Forbidden bilan bloklaydi. Brauzerga o'xshash sarlavha
-# qo'yish ko'pincha buni chetlab o'tadi.
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -42,10 +38,6 @@ _HEADERS = {
 
 
 def fetch_all_tickers() -> list:
-    """
-    Bybit linear (USDT perpetual) bozoridagi barcha juftliklar uchun
-    24 soatlik statistikani BITTA so'rovda qaytaradi.
-    """
     url = f"{BYBIT_BASE}/v5/market/tickers"
     r = requests.get(url, params={"category": "linear"}, headers=_HEADERS, timeout=15)
     r.raise_for_status()
@@ -53,11 +45,6 @@ def fetch_all_tickers() -> list:
 
 
 def _activity_score(ticker: dict) -> float:
-    """
-    Faqat bulk ticker ma'lumoti asosida tezkor "g'ayrioddiy faollik" bahosi.
-    Kichik token bo'lsa ham, narxi/diapazoni keskin siljigan bo'lsa yuqori
-    ball oladi — hajm kattaligiga qarab kamsitilmaydi.
-    """
     try:
         last = float(ticker.get("lastPrice", 0) or 0)
         high = float(ticker.get("highPrice24h", 0) or 0)
@@ -71,10 +58,6 @@ def _activity_score(ticker: dict) -> float:
 
 
 def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> list:
-    """
-    Skanerlash uchun nomzod symbollar ro'yxatini qaytaradi.
-    Bybit so'rovi ishlamasa, WATCHLIST'ga qaytadi (bot to'xtab qolmasligi uchun).
-    """
     if max_candidates is None:
         max_candidates = MAX_CANDIDATES_PER_SCAN
 
@@ -109,7 +92,6 @@ def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> li
 
 
 def get_current_price(symbol: str) -> float:
-    """Bitta symbol uchun joriy narxni qaytaradi (baholash/hisobot uchun)."""
     url = f"{BYBIT_BASE}/v5/market/tickers"
     r = requests.get(url, params={"category": "linear", "symbol": symbol}, headers=_HEADERS, timeout=10)
     r.raise_for_status()
