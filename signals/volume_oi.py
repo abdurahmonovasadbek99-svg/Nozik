@@ -2,8 +2,6 @@
 Volume / Open Interest spike signal moduli.
 Bybit va Binance futures API'laridan hajm va OI ma'lumotlarini olib,
 so'nggi qiymatlarni tarixiy o'rtacha bilan solishtiradi.
-Har bir signal moduli standart interfeys qaytaradi:
-    {"score": 0-100, "direction": "long"/"short"/"neutral", "details": {...}}
 """
 import statistics
 import requests
@@ -13,13 +11,11 @@ BINANCE_BASE = "https://fapi.binance.com"
 
 
 def _bybit_kline_volumes(symbol: str, interval: str = "15", limit: int = 20):
-    """So'nggi N ta sham hajmini qaytaradi."""
     url = f"{BYBIT_BASE}/v5/market/kline"
     params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
     r = requests.get(url, params=params, timeout=10)
     r.raise_for_status()
     rows = r.json()["result"]["list"]
-    # Bybit eng yangisidan eskisiga qarab qaytaradi -> teskari qilamiz
     rows = list(reversed(rows))
     volumes = [float(row[5]) for row in rows]
     closes = [float(row[4]) for row in rows]
@@ -37,10 +33,6 @@ def _bybit_open_interest(symbol: str, interval: str = "15min", limit: int = 20):
 
 
 def analyze(symbol: str) -> dict:
-    """
-    Berilgan symbol (masalan 'BTCUSDT') uchun volume + OI spike tahlili.
-    Qaytaradi: score (0-100), direction, details
-    """
     try:
         volumes, closes = _bybit_kline_volumes(symbol)
         oi = _bybit_open_interest(symbol)
@@ -50,18 +42,13 @@ def analyze(symbol: str) -> dict:
     if len(volumes) < 5 or len(oi) < 5:
         return {"score": 0, "direction": "neutral", "details": {"error": "yetarli data yo'q"}}
 
-    # Oxirgi sham hajmi vs o'rtacha (oxirgisidan tashqari)
     last_volume = volumes[-1]
     avg_volume = statistics.mean(volumes[:-1])
     volume_ratio = last_volume / avg_volume if avg_volume > 0 else 1
 
-    # OI o'zgarishi (foizda)
     oi_change_pct = ((oi[-1] - oi[0]) / oi[0]) * 100 if oi[0] > 0 else 0
-
-    # Narx yo'nalishi
     price_change_pct = ((closes[-1] - closes[0]) / closes[0]) * 100 if closes[0] > 0 else 0
 
-    # Score hisoblash: volume spike + OI o'sishi kombinatsiyasi
     score = 0
     if volume_ratio >= 3:
         score += 50
@@ -79,7 +66,6 @@ def analyze(symbol: str) -> dict:
 
     score = min(score, 100)
 
-    # Yo'nalish: narx va OI birga o'sayotgan bo'lsa -> long spike, aks holda short
     if oi_change_pct > 2 and price_change_pct > 0:
         direction = "long"
     elif oi_change_pct > 2 and price_change_pct < 0:
