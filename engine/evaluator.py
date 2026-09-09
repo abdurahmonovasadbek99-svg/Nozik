@@ -44,10 +44,6 @@ def record_signal(symbol: str, direction: str, confluence_score: float, price: f
 
 
 def evaluate_pending(get_current_price_fn, eval_after_seconds: int = 3600, success_threshold_pct: float = 1.0):
-    """
-    eval_after_seconds vaqt o'tgan, hali baholanmagan signallarni tekshiradi.
-    get_current_price_fn(symbol) -> float qaytaruvchi funksiya berilishi kerak.
-    """
     conn = sqlite3.connect(DB_PATH)
     cutoff = int(time.time()) - eval_after_seconds
     rows = conn.execute(
@@ -103,12 +99,6 @@ def get_stats() -> dict:
 
 
 def get_stats_since(seconds_ago: int) -> dict:
-    """
-    get_stats() bilan bir xil, lekin faqat berilgan davr ichida (masalan
-    kunlik hisobot uchun 86400, haftalik uchun 604800) yuborilgan
-    signallar bo'yicha. Kunlik/haftalik avtomatik hisobotlar shu yerdan
-    ma'lumot oladi.
-    """
     conn = sqlite3.connect(DB_PATH)
     cutoff = int(time.time()) - seconds_ago
 
