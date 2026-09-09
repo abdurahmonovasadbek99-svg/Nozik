@@ -1,6 +1,6 @@
 """
 Confluence Aggregator.
-4 ta signal modulini chaqirib, og'irlikka asoslangan umumiy score
+5 ta signal modulini chaqirib, og'irlikka asoslangan umumiy score
 va yakuniy yo'nalishni hisoblaydi.
 """
 import sys
@@ -8,13 +8,14 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import SIGNAL_WEIGHTS
-from signals import volume_oi, whale_tracker, ict_smc, sentiment
+from signals import volume_oi, whale_tracker, ict_smc, sentiment, volume_bos_combo
 
 SIGNAL_MODULES = {
     "volume_oi": volume_oi,
     "whale": whale_tracker,
     "ict_smc": ict_smc,
     "sentiment": sentiment,
+    "volume_bos_combo": volume_bos_combo,
 }
 
 
@@ -45,7 +46,6 @@ def analyze_symbol(symbol: str) -> dict:
         direction_votes[result["direction"]] += result["score"]
         direction_counts[result["direction"]] += 1
 
-    # Yakuniy yo'nalish - eng ko'p og'irlashtirilgan ovoz olgan tomon
     final_direction = max(direction_votes, key=direction_votes.get)
     if direction_votes[final_direction] == 0:
         final_direction = "neutral"
