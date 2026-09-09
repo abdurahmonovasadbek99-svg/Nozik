@@ -17,6 +17,7 @@ from config import (
     ADMIN_CHAT_IDS,
     WATCHLIST,
     ALERT_THRESHOLD,
+    STRONG_COMBO_THRESHOLD,
     SCAN_INTERVAL_SECONDS,
     PORT,
     MIN_SIGNAL_AGREEMENT,
@@ -190,10 +191,25 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         direction = r["direction"]
         agreement = r["agreement_count"]
 
-        if score < ALERT_THRESHOLD or direction == "neutral":
+        combo = r["signals"].get("volume_bos_combo", {})
+        combo_score = combo.get("score", 0)
+        combo_direction = combo.get("direction", "neutral")
+        strong_combo = combo_score >= STRONG_COMBO_THRESHOLD and combo_direction in ("long", "short")
+
+        normal_trigger = (
+            score >= ALERT_THRESHOLD
+            and direction != "neutral"
+            and agreement >= MIN_SIGNAL_AGREEMENT
+        )
+
+        if not normal_trigger and not strong_combo:
             continue
-        if agreement < MIN_SIGNAL_AGREEMENT:
-            continue
+
+        trigger_reason = None
+        if not normal_trigger and strong_combo:
+            direction = combo_direction
+            score = combo_score
+            trigger_reason = "🔥 Kuchli hajm+BOS tasdiqlash (alohida trigger)"
 
         last_sent = _last_alert_time.get(symbol, 0)
         if now - last_sent < ALERT_COOLDOWN_SECONDS:
@@ -211,7 +227,8 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         emoji = "🟢🚀" if direction == "long" else "🔴📉"
         text = (
             f"{emoji} SIGNAL: {symbol}\n\n"
-            f"Yo'nalish: {direction.upper()}\n"
+            + (f"{trigger_reason}\n\n" if trigger_reason else "")
+            + f"Yo'nalish: {direction.upper()}\n"
             f"Confluence score: {score}/100 ({agreement}/{r['signal_count']} modul rozi)\n"
             f"Narx: {price_value}\n\n"
         )
