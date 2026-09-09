@@ -6,6 +6,8 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python bot.py"
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: ADMIN_CHAT_IDS
@@ -28,5 +30,9 @@ services:
         value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT"
       - key: ALERT_THRESHOLD
         value: "65"
+      - key: STRONG_COMBO_THRESHOLD
+        value: "80"
       - key: SCAN_INTERVAL_SECONDS
         value: "300"
+      - key: MIN_SIGNAL_AGREEMENT
+        value: "2"
