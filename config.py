@@ -31,14 +31,19 @@ WATCHLIST = os.environ.get(
 
 # --- Signal og'irliklari (confluence score uchun, jami 100) ---
 SIGNAL_WEIGHTS = {
-    "volume_oi": 30,
-    "whale": 25,
-    "ict_smc": 30,
-    "sentiment": 15,
+    "volume_oi": 25,
+    "whale": 20,
+    "ict_smc": 25,
+    "sentiment": 10,
+    "volume_bos_combo": 20,
 }
 
 # --- Xabar yuborish uchun minimal umumiy score (0-100) ---
 ALERT_THRESHOLD = int(os.environ.get("ALERT_THRESHOLD", "65"))
+
+# --- Hajm+BOS combo o'zi juda kuchli bo'lsa (tasdiqlangan breakout),
+# boshqa modullarni kutmasdan darhol signal yuborish uchun chegara ---
+STRONG_COMBO_THRESHOLD = int(os.environ.get("STRONG_COMBO_THRESHOLD", "80"))
 
 # --- Skanerlash intervali (soniyada) ---
 SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
