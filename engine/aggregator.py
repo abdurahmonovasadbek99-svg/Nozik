@@ -2,13 +2,15 @@
 Confluence Aggregator.
 5 ta signal modulini chaqirib, og'irlikka asoslangan umumiy score
 va yakuniy yo'nalishni hisoblaydi.
-"""
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+TUZATISH: kline ma'lumotlari endi BU YERDA bir marta yuklanib,
+modullarga uzatiladi. Avval ict_smc, volume_oi va
+volume_bos_combo har biri alohida bir xil kline'ni yuklar edi
+(har bir coin uchun 3x ortiqcha so'rov).
+"""
 from config import SIGNAL_WEIGHTS
 from signals import volume_oi, whale_tracker, ict_smc, sentiment, volume_bos_combo
+from signals.klines import get_klines
 
 SIGNAL_MODULES = {
     "volume_oi": volume_oi,
@@ -34,9 +36,16 @@ def analyze_symbol(symbol: str) -> dict:
     direction_votes = {"long": 0, "short": 0, "neutral": 0}
     direction_counts = {"long": 0, "short": 0, "neutral": 0}
 
+    # Kline'ni bir marta yuklaymiz (xato bo'lsa modullar o'zlari
+    # neutral qaytaradi)
+    try:
+        candles = get_klines(symbol)
+    except Exception:
+        candles = []
+
     for name, module in SIGNAL_MODULES.items():
         try:
-            result = module.analyze(symbol)
+            result = module.analyze(symbol, candles=candles)
         except Exception as e:
             result = {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
 
