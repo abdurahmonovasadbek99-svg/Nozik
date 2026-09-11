@@ -8,28 +8,11 @@ Mantiq:
 
 Ma'lumot manbai: Bybit "linear" (USDT-perpetual fyuchers) bozori.
 Spot bozor UMUMAN ishlatilmaydi.
+
+TUZATISH: kline'ni aggregator dan (candles parametr) oladi —
+ortiqcha takroriy so'rov yo'q.
 """
-import requests
-
-BYBIT_BASE = "https://api.bybit.com"
-
-
-def _get_futures_klines(symbol: str, interval: str = "15", limit: int = 60):
-    url = f"{BYBIT_BASE}/v5/market/kline"
-    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    rows = list(reversed(r.json()["result"]["list"]))
-    candles = []
-    for row in rows:
-        candles.append({
-            "open": float(row[1]),
-            "high": float(row[2]),
-            "low": float(row[3]),
-            "close": float(row[4]),
-            "volume": float(row[5]),
-        })
-    return candles
+from signals.klines import get_klines
 
 
 def _find_swing_points(candles, lookback=3):
@@ -64,11 +47,12 @@ def _volume_spike_ratio(candles) -> float:
     return last_volume / avg_volume
 
 
-def analyze(symbol: str) -> dict:
-    try:
-        candles = _get_futures_klines(symbol)
-    except Exception as e:
-        return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
+def analyze(symbol: str, candles: list = None) -> dict:
+    if candles is None:
+        try:
+            candles = get_klines(symbol, limit=60)
+        except Exception as e:
+            return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
 
     if len(candles) < 20:
         return {"score": 0, "direction": "neutral", "details": {"error": "yetarli data yo'q"}}
