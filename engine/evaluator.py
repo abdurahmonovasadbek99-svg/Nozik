@@ -3,12 +3,16 @@ Signal Evaluator.
 Har bir yuborilgan signalni SQLite bazasiga yozadi va keyinchalik
 narx qanday harakatlanganini tekshirib, aniqlik statistikasini yuritadi.
 /pump_stats buyrug'i shu yerdan ma'lumot oladi.
+
+TUZATISHLAR:
+- price_at_signal = 0 bo'lgan signallar 0 ga bo'lish (ZeroDivisionError)
+  keltirib chiqarardi va baholashni har doim sindirib yuborardi.
+  Endi bunday signallar 'invalid' deb belgilanadi.
+- Bitta signal xato bersa qolganlarining baholanishi to'xtab
+  qolmasligi uchun har bir qator alohida try/except ichida.
 """
 import sqlite3
 import time
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import DB_PATH
 
 
@@ -54,23 +58,34 @@ def evaluate_pending(get_current_price_fn, eval_after_seconds: int = 3600, succe
 
     for row_id, symbol, direction, price_at_signal in rows:
         try:
+            # TUZATISH: narx 0 (yoki manfiy) yozilgan signallar 0 ga
+            # bo'lishga olib kelardi. Ularni belgilab o'tkazib yuboramiz.
+            if not price_at_signal or price_at_signal <= 0:
+                conn.execute(
+                    "UPDATE signals SET evaluated=1, outcome='invalid' WHERE id=?",
+                    (row_id,),
+                )
+                continue
+
             current_price = get_current_price_fn(symbol)
+
+            pct_change = ((current_price - price_at_signal) / price_at_signal) * 100
+
+            if direction == "long":
+                outcome = "success" if pct_change >= success_threshold_pct else "fail"
+            elif direction == "short":
+                outcome = "success" if pct_change <= -success_threshold_pct else "fail"
+            else:
+                outcome = "neutral"
+
+            conn.execute(
+                "UPDATE signals SET evaluated=1, outcome=?, price_after=?, pct_change=? WHERE id=?",
+                (outcome, current_price, pct_change, row_id),
+            )
         except Exception:
+            # TUZATISH: bitta signal xato bersa (API down, narx yo'q va h.k.)
+            # qolgan signallar baholanishda davom etadi
             continue
-
-        pct_change = ((current_price - price_at_signal) / price_at_signal) * 100
-
-        if direction == "long":
-            outcome = "success" if pct_change >= success_threshold_pct else "fail"
-        elif direction == "short":
-            outcome = "success" if pct_change <= -success_threshold_pct else "fail"
-        else:
-            outcome = "neutral"
-
-        conn.execute(
-            "UPDATE signals SET evaluated=1, outcome=?, price_after=?, pct_change=? WHERE id=?",
-            (outcome, current_price, pct_change, row_id),
-        )
 
     conn.commit()
     conn.close()
@@ -84,7 +99,7 @@ def get_stats() -> dict:
     ).fetchone()[0]
     pending = conn.execute("SELECT COUNT(*) FROM signals WHERE evaluated=0").fetchone()[0]
     avg_pct = conn.execute(
-        "SELECT AVG(pct_change) FROM signals WHERE evaluated=1"
+        "SELECT AVG(pct_change) FROM signals WHERE evaluated=1 AND outcome != 'invalid'"
     ).fetchone()[0]
     conn.close()
 
@@ -113,7 +128,7 @@ def get_stats_since(seconds_ago: int) -> dict:
         (cutoff,),
     ).fetchone()[0]
     avg_pct = conn.execute(
-        "SELECT AVG(pct_change) FROM signals WHERE timestamp >= ? AND evaluated=1",
+        "SELECT AVG(pct_change) FROM signals WHERE timestamp >= ? AND evaluated=1 AND outcome != 'invalid'",
         (cutoff,),
     ).fetchone()[0]
     best = conn.execute(
