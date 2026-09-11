@@ -3,6 +3,10 @@ Sentiment signal moduli.
 LunarCrush API orqali ijtimoiy tarmoqlardagi mention hajmi va sentiment
 o'zgarishini kuzatadi. Keskin o'sish -> potensial pump signalining
 ijtimoiy tasdig'i.
+
+TUZATISH: candles parametri interfeys bir xilligi uchun qo'shildi
+(aggregator barcha modullarga bir xil chaqiriq qiladi), lekin bu
+modul undan foydalanmaydi.
 """
 import requests
 from config import LUNARCRUSH_API_KEY
@@ -14,7 +18,7 @@ def _to_lc_symbol(symbol: str) -> str:
     return symbol.replace("USDT", "").lower()
 
 
-def analyze(symbol: str) -> dict:
+def analyze(symbol: str, candles: list = None) -> dict:
     if not LUNARCRUSH_API_KEY:
         return {"score": 0, "direction": "neutral", "details": {"error": "API key yo'q"}}
 
