@@ -8,28 +8,11 @@ ni aniqlaydi va shu asosda score/direction qaytaradi.
 
 Eslatma: bu soddalashtirilgan, qoidaga asoslangan (rule-based) implementatsiya.
 Sizning ICT/SMC bilimingizga mos ravishda parametrlarni keyinchalik nozik sozlash mumkin.
+
+TUZATISH: kline'ni aggregator dan (candles parametr) oladi —
+ortiqcha takroriy so'rov yo'q.
 """
-import requests
-
-BYBIT_BASE = "https://api.bybit.com"
-
-
-def _get_klines(symbol: str, interval: str = "15", limit: int = 100):
-    url = f"{BYBIT_BASE}/v5/market/kline"
-    params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": limit}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    rows = list(reversed(r.json()["result"]["list"]))
-    candles = []
-    for row in rows:
-        candles.append({
-            "open": float(row[1]),
-            "high": float(row[2]),
-            "low": float(row[3]),
-            "close": float(row[4]),
-            "volume": float(row[5]),
-        })
-    return candles
+from signals.klines import get_klines
 
 
 def _find_swing_points(candles, lookback=3):
@@ -97,11 +80,12 @@ def _find_order_block(candles, direction: str):
     return None
 
 
-def analyze(symbol: str) -> dict:
-    try:
-        candles = _get_klines(symbol)
-    except Exception as e:
-        return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
+def analyze(symbol: str, candles: list = None) -> dict:
+    if candles is None:
+        try:
+            candles = get_klines(symbol)
+        except Exception as e:
+            return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
 
     if len(candles) < 20:
         return {"score": 0, "direction": "neutral", "details": {"error": "yetarli data yo'q"}}
