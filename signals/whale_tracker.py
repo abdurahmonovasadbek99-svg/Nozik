@@ -3,6 +3,10 @@ Whale tracking signal moduli.
 Whale Alert API orqali so'nggi yirik on-chain tranzaksiyalarni tekshiradi.
 Birjaga pul kirsa (exchange inflow) -> ko'pincha sotish signali (short bias).
 Birjadan pul chiqsa (exchange outflow) -> ko'pincha ushlab turish/xarid signali (long bias).
+
+TUZATISH: candles parametri interfeys bir xilligi uchun qo'shildi
+(aggregator barcha modullarga bir xil chaqiriq qiladi), lekin bu
+modul undan foydalanmaydi.
 """
 import requests
 from config import WHALE_ALERT_API_KEY
@@ -22,7 +26,7 @@ SYMBOL_MAP = {
 MIN_USD_VALUE = 1_000_000
 
 
-def analyze(symbol: str, lookback_minutes: int = 30) -> dict:
+def analyze(symbol: str, candles: list = None, lookback_minutes: int = 30) -> dict:
     if not WHALE_ALERT_API_KEY:
         return {"score": 0, "direction": "neutral", "details": {"error": "API key yo'q"}}
 
