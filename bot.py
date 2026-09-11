@@ -2,7 +2,13 @@
 Nozik Bot v2 - Asosiy Telegram interfeysi.
 Signal generatsiya mantig'i engine/ va signals/ papkalarida,
 bu fayl faqat Telegram bilan muloqot qatlami.
+
+TUZATISHLAR (v2.1):
+- Blocking so'rovlar asyncio.to_thread orqali (bot endi muzlamaydi)
+- Buyruqlar faqat adminlar uchun
+- TELEGRAM_BOT_TOKEN bo'sh bo'lsa aniq xabar bilan to'xtaydi
 """
+import asyncio
 import datetime
 import logging
 import threading
@@ -43,17 +49,26 @@ ALERT_COOLDOWN_SECONDS = 3600
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["🔍 Skanerlash", "📈 Statistika"],
-        ["📊 Hisobot", "👀 Watchlist"],
+        ["ð Skanerlash", "ð Statistika"],
+        ["ð Hisobot", "ð Watchlist"],
     ],
     resize_keyboard=True,
 )
 
 
+def _is_admin(update: Update) -> bool:
+    """Buyruqlar faqat ADMIN_CHAT_IDS ro'yxatidagi foydalanuvchilar uchun."""
+    user = update.effective_user
+    return user is not None and user.id in ADMIN_CHAT_IDS
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update):
+        await update.message.reply_text("Bu bot shaxsiy ishlatiladi. Kirish rad etildi.")
+        return
     await update.message.reply_text(
-        "🤖 Nozik Bot v2 ishga tushdi.\n\n"
-        "Endi faqat watchlist emas — Bybit'dagi BARCHA USDT juftliklari "
+        "ð¤ Nozik Bot v2 ishga tushdi.\n\n"
+        "Endi faqat watchlist emas â Bybit'dagi BARCHA USDT juftliklari "
         "(kichik/alt tokenlar ham) muntazam skanerlanadi.\n\n"
         "Pastdagi menyudan foydalaning yoki buyruqlarni yozing:\n"
         "/scan - hozir butun bozorni tekshirish\n"
@@ -66,12 +81,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Butun bozor (kichik tokenlar ham) tekshirilmoqda, biroz kuting...")
-    candidates = get_candidates()
-    results = scan_watchlist(candidates)
-    lines = [f"📊 Skanerlash natijalari ({len(candidates)} juftlik tekshirildi):\n"]
+    if not _is_admin(update):
+        await update.message.reply_text("Ruxsat yo'q.")
+        return
+    await update.message.reply_text("ð Butun bozor (kichik tokenlar ham) tekshirilmoqda, biroz kuting...")
+    # TUZATISH: og'ir tarmoq so'rovlari event loop'ni bloklamasligi uchun to_thread
+    candidates = await asyncio.to_thread(get_candidates)
+    results = await asyncio.to_thread(scan_watchlist, candidates)
+    lines = [f"ð Skanerlash natijalari ({len(candidates)} juftlik tekshirildi):\n"]
     for r in results[:10]:
-        emoji = "🟢" if r["direction"] == "long" else "🔴" if r["direction"] == "short" else "⚪"
+        emoji = "ð¢" if r["direction"] == "long" else "ð´" if r["direction"] == "short" else "âª"
         lines.append(
             f"{emoji} {r['symbol']}: {r['confluence_score']}/100 "
             f"({r['direction']}, {r['agreement_count']}/{r['signal_count']} modul rozi)"
@@ -80,23 +99,27 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update):
+        return
     if not context.args:
         await update.message.reply_text("Iltimos, coin belgisini kiriting. Masalan: /check BTCUSDT")
         return
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"🔍 {symbol} tekshirilmoqda...")
-    result = analyze_symbol(symbol)
+    await update.message.reply_text(f"ð {symbol} tekshirilmoqda...")
+    result = await asyncio.to_thread(analyze_symbol, symbol)
 
-    lines = [f"📊 {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
+    lines = [f"ð {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
     for name, sig in result["signals"].items():
-        lines.append(f"• {name}: {sig['score']}/100 ({sig['direction']})")
+        lines.append(f"â¢ {name}: {sig['score']}/100 ({sig['direction']})")
     await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update):
+        return
     stats = get_stats()
     text = (
-        "📈 Signal statistikasi:\n\n"
+        "ð Signal statistikasi:\n\n"
         f"Baholangan signallar: {stats['total_evaluated']}\n"
         f"Muvaffaqiyatli: {stats['successful']}\n"
         f"Aniqlik: {stats['accuracy_pct']}%\n"
@@ -107,19 +130,23 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👀 Doim kuzatiladigan asosiy coinlar:\n" + ", ".join(WATCHLIST))
+    if not _is_admin(update):
+        return
+    await update.message.reply_text("ð Doim kuzatiladigan asosiy coinlar:\n" + ", ".join(WATCHLIST))
 
 
 async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update):
+        return
     text = update.message.text
 
-    if text == "🔍 Skanerlash":
+    if text == "ð Skanerlash":
         await cmd_scan(update, context)
-    elif text == "📈 Statistika":
+    elif text == "ð Statistika":
         await cmd_pump_stats(update, context)
-    elif text == "📊 Hisobot":
+    elif text == "ð Hisobot":
         await cmd_report(update, context)
-    elif text == "👀 Watchlist":
+    elif text == "ð Watchlist":
         await cmd_watchlist(update, context)
     else:
         await update.message.reply_text(
@@ -143,19 +170,21 @@ def _format_period_report(title: str, stats: dict) -> str:
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update):
+        return
     daily = get_stats_since(86400)
     weekly = get_stats_since(604800)
     text = (
-        _format_period_report("📅 So'nggi 24 soat", daily)
+        _format_period_report("ð So'nggi 24 soat", daily)
         + "\n\n"
-        + _format_period_report("🗓 So'nggi 7 kun", weekly)
+        + _format_period_report("ð So'nggi 7 kun", weekly)
     )
     await update.message.reply_text(text)
 
 
 async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(86400)
-    text = _format_period_report("📅 Kunlik hisobot", stats)
+    text = _format_period_report("ð Kunlik hisobot", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -165,7 +194,7 @@ async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(604800)
-    text = _format_period_report("🗓 Haftalik hisobot", stats)
+    text = _format_period_report("ð Haftalik hisobot", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -175,14 +204,23 @@ async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_evaluate(context: ContextTypes.DEFAULT_TYPE):
     try:
-        evaluate_pending(get_current_price, eval_after_seconds=EVAL_AFTER_SECONDS)
+        await asyncio.to_thread(
+            evaluate_pending, get_current_price,
+            eval_after_seconds=EVAL_AFTER_SECONDS,
+        )
     except Exception as e:
         logger.error(f"Signallarni baholashda xato: {e}")
 
 
 async def background_scan(context: ContextTypes.DEFAULT_TYPE):
-    candidates = get_candidates()
-    results = scan_watchlist(candidates)
+    # TUZATISH: butun skanerlash alohida thread'da â bot javob berishda davom etadi
+    try:
+        candidates = await asyncio.to_thread(get_candidates)
+        results = await asyncio.to_thread(scan_watchlist, candidates)
+    except Exception as e:
+        logger.error(f"Skanerlashda xato: {e}")
+        return
+
     now = time.time()
 
     for r in results:
@@ -209,7 +247,7 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         if not normal_trigger and strong_combo:
             direction = combo_direction
             score = combo_score
-            trigger_reason = "🔥 Kuchli hajm+BOS tasdiqlash (alohida trigger)"
+            trigger_reason = "ð¥ Kuchli hajm+BOS tasdiqlash (alohida trigger)"
 
         last_sent = _last_alert_time.get(symbol, 0)
         if now - last_sent < ALERT_COOLDOWN_SECONDS:
@@ -218,13 +256,13 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         _last_alert_time[symbol] = now
 
         try:
-            price_value = get_current_price(symbol)
+            price_value = await asyncio.to_thread(get_current_price, symbol)
         except Exception:
             price_value = 0
 
         record_signal(symbol, direction, score, price_value or 0)
 
-        emoji = "🟢🚀" if direction == "long" else "🔴📉"
+        emoji = "ð¢ð" if direction == "long" else "ð´ð"
         text = (
             f"{emoji} SIGNAL: {symbol}\n\n"
             + (f"{trigger_reason}\n\n" if trigger_reason else "")
@@ -233,7 +271,7 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
             f"Narx: {price_value}\n\n"
         )
         for name, sig in r["signals"].items():
-            text += f"• {name}: {sig['score']}/100 ({sig['direction']})\n"
+            text += f"â¢ {name}: {sig['score']}/100 ({sig['direction']})\n"
 
         for chat_id in ADMIN_CHAT_IDS:
             try:
@@ -269,6 +307,13 @@ async def _post_init(app: Application):
 
 
 def main():
+    # TUZATISH: token sozlanmagan bo'lsa tushunarsiz xato o'rniga aniq xabar
+    if not TELEGRAM_BOT_TOKEN:
+        raise SystemExit(
+            "XATO: TELEGRAM_BOT_TOKEN topilmadi! "
+            "Render'da Environment Variables bo'limini tekshiring."
+        )
+
     init_db()
 
     threading.Thread(target=run_health_server, daemon=True).start()
