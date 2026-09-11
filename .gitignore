@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Maxfiy ma'lumotlar - HECH QACHON GitHub'ga tushmasligi kerak
+.env
+*.env
+
+# Lokal ma'lumotlar bazasi
+nozik.db
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
