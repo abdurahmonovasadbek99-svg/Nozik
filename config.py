@@ -5,11 +5,25 @@ Hech qachon kalitlarni kodga yozmang!
 """
 import os
 
+
+# TUZATISH: noto'g'ri formatdagi ID'lar butun botni ishga tushirishni
+# to'xtatardi. Endi xato beruvchi qiymatlar o'tkazib yuboriladi.
+def _parse_admin_ids(raw: str) -> list:
+    ids = []
+    for x in raw.split(","):
+        x = x.strip()
+        if not x:
+            continue
+        try:
+            ids.append(int(x))
+        except ValueError:
+            pass
+    return ids
+
+
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ADMIN_CHAT_IDS = [
-    int(x) for x in os.environ.get("ADMIN_CHAT_IDS", "").split(",") if x.strip()
-]
+ADMIN_CHAT_IDS = _parse_admin_ids(os.environ.get("ADMIN_CHAT_IDS", ""))
 
 # --- Exchange APIs (Volume / Open Interest) ---
 BYBIT_API_KEY = os.environ.get("BYBIT_API_KEY", "")
@@ -49,6 +63,9 @@ STRONG_COMBO_THRESHOLD = int(os.environ.get("STRONG_COMBO_THRESHOLD", "80"))
 SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
 
 # --- Ma'lumotlar bazasi fayli (signal tarixi/statistika uchun) ---
+# DIQQAT: Render bepul tarifda disk vaqtinchalik — har redeploy'da
+# nozik.db yo'qoladi. Doimiy statistika kerak bo'lsa Render
+# PostgreSQL'ga o'ting.
 DB_PATH = os.environ.get("DB_PATH", "nozik.db")
 
 # --- Universe / Prescreen (kichik tokenlarni ham skanerlash uchun) ---
