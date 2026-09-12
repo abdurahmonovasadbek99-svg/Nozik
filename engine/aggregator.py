@@ -66,6 +66,7 @@ def analyze_symbol(symbol: str) -> dict:
         "agreement_count": direction_counts[final_direction],
         "signal_count": len(SIGNAL_MODULES),
         "signals": results,
+        "candles": candles,
     }
 
 
