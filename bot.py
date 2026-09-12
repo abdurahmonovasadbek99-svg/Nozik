@@ -49,8 +49,8 @@ ALERT_COOLDOWN_SECONDS = 3600
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["ð Skanerlash", "ð Statistika"],
-        ["ð Hisobot", "ð Watchlist"],
+        ["🔍 Skanerlash", "📈 Statistika"],
+        ["📊 Hisobot", "👀 Watchlist"],
     ],
     resize_keyboard=True,
 )
@@ -67,8 +67,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Bu bot shaxsiy ishlatiladi. Kirish rad etildi.")
         return
     await update.message.reply_text(
-        "ð¤ Nozik Bot v2 ishga tushdi.\n\n"
-        "Endi faqat watchlist emas â Bybit'dagi BARCHA USDT juftliklari "
+        "🤖 Nozik Bot v2 ishga tushdi.\n\n"
+        "Endi faqat watchlist emas — Bybit'dagi BARCHA USDT juftliklari "
         "(kichik/alt tokenlar ham) muntazam skanerlanadi.\n\n"
         "Pastdagi menyudan foydalaning yoki buyruqlarni yozing:\n"
         "/scan - hozir butun bozorni tekshirish\n"
@@ -84,13 +84,13 @@ async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         await update.message.reply_text("Ruxsat yo'q.")
         return
-    await update.message.reply_text("ð Butun bozor (kichik tokenlar ham) tekshirilmoqda, biroz kuting...")
+    await update.message.reply_text("🔍 Butun bozor (kichik tokenlar ham) tekshirilmoqda, biroz kuting...")
     # TUZATISH: og'ir tarmoq so'rovlari event loop'ni bloklamasligi uchun to_thread
     candidates = await asyncio.to_thread(get_candidates)
     results = await asyncio.to_thread(scan_watchlist, candidates)
-    lines = [f"ð Skanerlash natijalari ({len(candidates)} juftlik tekshirildi):\n"]
+    lines = [f"📊 Skanerlash natijalari ({len(candidates)} juftlik tekshirildi):\n"]
     for r in results[:10]:
-        emoji = "ð¢" if r["direction"] == "long" else "ð´" if r["direction"] == "short" else "âª"
+        emoji = "🟢" if r["direction"] == "long" else "🔴" if r["direction"] == "short" else "⚪"
         lines.append(
             f"{emoji} {r['symbol']}: {r['confluence_score']}/100 "
             f"({r['direction']}, {r['agreement_count']}/{r['signal_count']} modul rozi)"
@@ -105,12 +105,12 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, coin belgisini kiriting. Masalan: /check BTCUSDT")
         return
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"ð {symbol} tekshirilmoqda...")
+    await update.message.reply_text(f"🔍 {symbol} tekshirilmoqda...")
     result = await asyncio.to_thread(analyze_symbol, symbol)
 
-    lines = [f"ð {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
+    lines = [f"📊 {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
     for name, sig in result["signals"].items():
-        lines.append(f"â¢ {name}: {sig['score']}/100 ({sig['direction']})")
+        lines.append(f"• {name}: {sig['score']}/100 ({sig['direction']})")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -119,7 +119,7 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     stats = get_stats()
     text = (
-        "ð Signal statistikasi:\n\n"
+        "📈 Signal statistikasi:\n\n"
         f"Baholangan signallar: {stats['total_evaluated']}\n"
         f"Muvaffaqiyatli: {stats['successful']}\n"
         f"Aniqlik: {stats['accuracy_pct']}%\n"
@@ -132,7 +132,7 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         return
-    await update.message.reply_text("ð Doim kuzatiladigan asosiy coinlar:\n" + ", ".join(WATCHLIST))
+    await update.message.reply_text("👀 Doim kuzatiladigan asosiy coinlar:\n" + ", ".join(WATCHLIST))
 
 
 async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,13 +140,13 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = update.message.text
 
-    if text == "ð Skanerlash":
+    if text == "🔍 Skanerlash":
         await cmd_scan(update, context)
-    elif text == "ð Statistika":
+    elif text == "📈 Statistika":
         await cmd_pump_stats(update, context)
-    elif text == "ð Hisobot":
+    elif text == "📊 Hisobot":
         await cmd_report(update, context)
-    elif text == "ð Watchlist":
+    elif text == "👀 Watchlist":
         await cmd_watchlist(update, context)
     else:
         await update.message.reply_text(
@@ -175,16 +175,16 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     daily = get_stats_since(86400)
     weekly = get_stats_since(604800)
     text = (
-        _format_period_report("ð So'nggi 24 soat", daily)
+        _format_period_report("📅 So'nggi 24 soat", daily)
         + "\n\n"
-        + _format_period_report("ð So'nggi 7 kun", weekly)
+        + _format_period_report("🗓 So'nggi 7 kun", weekly)
     )
     await update.message.reply_text(text)
 
 
 async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(86400)
-    text = _format_period_report("ð Kunlik hisobot", stats)
+    text = _format_period_report("📅 Kunlik hisobot", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -194,7 +194,7 @@ async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(604800)
-    text = _format_period_report("ð Haftalik hisobot", stats)
+    text = _format_period_report("🗓 Haftalik hisobot", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -213,7 +213,7 @@ async def scheduled_evaluate(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def background_scan(context: ContextTypes.DEFAULT_TYPE):
-    # TUZATISH: butun skanerlash alohida thread'da â bot javob berishda davom etadi
+    # TUZATISH: butun skanerlash alohida thread'da — bot javob berishda davom etadi
     try:
         candidates = await asyncio.to_thread(get_candidates)
         results = await asyncio.to_thread(scan_watchlist, candidates)
@@ -247,7 +247,7 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         if not normal_trigger and strong_combo:
             direction = combo_direction
             score = combo_score
-            trigger_reason = "ð¥ Kuchli hajm+BOS tasdiqlash (alohida trigger)"
+            trigger_reason = "🔥 Kuchli hajm+BOS tasdiqlash (alohida trigger)"
 
         last_sent = _last_alert_time.get(symbol, 0)
         if now - last_sent < ALERT_COOLDOWN_SECONDS:
@@ -262,7 +262,7 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
 
         record_signal(symbol, direction, score, price_value or 0)
 
-        emoji = "ð¢ð" if direction == "long" else "ð´ð"
+        emoji = "🟢🚀" if direction == "long" else "🔴📉"
         text = (
             f"{emoji} SIGNAL: {symbol}\n\n"
             + (f"{trigger_reason}\n\n" if trigger_reason else "")
@@ -271,7 +271,7 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
             f"Narx: {price_value}\n\n"
         )
         for name, sig in r["signals"].items():
-            text += f"â¢ {name}: {sig['score']}/100 ({sig['direction']})\n"
+            text += f"• {name}: {sig['score']}/100 ({sig['direction']})\n"
 
         for chat_id in ADMIN_CHAT_IDS:
             try:
