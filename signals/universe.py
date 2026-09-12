@@ -1,20 +1,12 @@
 """
 Universe / Prescreen moduli.
+Bybit'dagi barcha USDT-perpetual coinlar orasidan skanerlash uchun
+nomzodlarni tanlaydi: past likvidlik (kam 24 soatlik savdo hajmi)
+va istisno qilingan symbollarni chiqarib tashlaydi.
 
-Muammo: eski versiya faqat qo'lda yozilgan 5 ta katta coin (WATCHLIST)ni
-tekshirar edi, shuning uchun kichik/alt tokenlarda boshlanayotgan
-pump/dump'lar ko'rinmay qolardi.
-
-Yechim (ikki bosqichli funnel):
-  1-bosqich (arzon): Bybit'dan BITTA so'rov bilan barcha linear USDT
-     juftliklarining 24 soatlik narx/hajm ma'lumotini olamiz, o'lik
-     coinlarni chetlab o'tamiz va "g'ayrioddiy faollik"ka qarab saralaymiz.
-  2-bosqich (qimmat): faqat eng faol N ta nomzod (MAX_CANDIDATES_PER_SCAN)
-     to'liq confluence tahliliga (ict_smc, volume_oi, whale, sentiment)
-     yuboriladi.
-
-Shu tarzda 500+ juftlikning barchasi e'tiborga olinadi (kichik tokenlar
-ham), lekin har 5 daqiqada faqat bir nechta og'ir so'rov ketadi.
+DIQQAT: bu fayl avval arxivda yo'q edi - bot.py uni import qiladi
+(get_candidates, get_current_price), shuning uchun bu fayl bo'lmasa
+bot ishga tushmas edi.
 """
 import requests
 
@@ -28,45 +20,29 @@ from config import (
 
 BYBIT_BASE = "https://api.bybit.com"
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-}
 
+def get_candidates() -> list:
+    """
+    Bybit linear (USDT-perpetual) bozoridagi barcha coinlarni oladi,
+    kam likvidlilarni (MIN_24H_TURNOVER_USDT dan past) chiqarib tashlaydi,
+    24 soatlik savdo hajmi bo'yicha kamayish tartibida saralaydi va
+    eng yuqoridagi MAX_CANDIDATES_PER_SCAN tasini qaytaradi.
 
-def fetch_all_tickers() -> list:
-    url = f"{BYBIT_BASE}/v5/market/tickers"
-    r = requests.get(url, params={"category": "linear"}, headers=_HEADERS, timeout=15)
-    r.raise_for_status()
-    return r.json()["result"]["list"]
-
-
-def _activity_score(ticker: dict) -> float:
+    WATCHLIST'dagi coinlar har doim ro'yxatga kiritiladi (likvidlik
+    filtridan qat'i nazar), chunki foydalanuvchi ularni doim kuzatishni
+    xohlagan.
+    """
     try:
-        last = float(ticker.get("lastPrice", 0) or 0)
-        high = float(ticker.get("highPrice24h", 0) or 0)
-        low = float(ticker.get("lowPrice24h", 0) or 0)
-        pct_change = abs(float(ticker.get("price24hPcnt", 0) or 0)) * 100
-    except (TypeError, ValueError):
-        return 0.0
-
-    range_pct = ((high - low) / low * 100) if low > 0 else 0.0
-    return max(pct_change, range_pct)
-
-
-def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> list:
-    if max_candidates is None:
-        max_candidates = MAX_CANDIDATES_PER_SCAN
-
-    try:
-        tickers = fetch_all_tickers()
-    except Exception as e:
-        import logging
-        logging.getLogger("nozik.universe").error(f"Bybit tickers olishda xato, faqat WATCHLIST ishlatiladi: {e}")
-        return list(dict.fromkeys((extra_symbols or []) + WATCHLIST))
+        r = requests.get(
+            f"{BYBIT_BASE}/v5/market/tickers",
+            params={"category": "linear"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        tickers = r.json().get("result", {}).get("list", [])
+    except Exception:
+        # Tarmoq xatosi bo'lsa, hech bo'lmasa WATCHLIST bilan davom etamiz
+        return list(dict.fromkeys(WATCHLIST))
 
     scored = []
     for t in tickers:
@@ -77,25 +53,32 @@ def get_candidates(max_candidates: int = None, extra_symbols: list = None) -> li
             continue
         try:
             turnover = float(t.get("turnover24h", 0) or 0)
-        except (TypeError, ValueError):
-            turnover = 0.0
+        except ValueError:
+            continue
         if turnover < MIN_24H_TURNOVER_USDT:
             continue
-        scored.append((symbol, _activity_score(t)))
+        scored.append((symbol, turnover))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    top_symbols = [s for s, _ in scored[:max_candidates]]
+    top_symbols = [s for s, _ in scored[:MAX_CANDIDATES_PER_SCAN]]
 
-    always_include = (extra_symbols or []) + WATCHLIST
-    final = list(dict.fromkeys(always_include + top_symbols))
-    return final
+    # WATCHLIST har doim ro'yxatda bo'lishi kerak, takrorlanmasdan
+    combined = list(dict.fromkeys(WATCHLIST + top_symbols))
+    return combined
 
 
 def get_current_price(symbol: str) -> float:
-    url = f"{BYBIT_BASE}/v5/market/tickers"
-    r = requests.get(url, params={"category": "linear", "symbol": symbol}, headers=_HEADERS, timeout=10)
-    r.raise_for_status()
-    rows = r.json()["result"]["list"]
-    if not rows:
-        raise ValueError(f"{symbol} uchun narx topilmadi")
-    return float(rows[0]["lastPrice"])
+    """Berilgan symbol uchun so'nggi narxni qaytaradi (topilmasa 0)."""
+    try:
+        r = requests.get(
+            f"{BYBIT_BASE}/v5/market/tickers",
+            params={"category": "linear", "symbol": symbol},
+            timeout=10,
+        )
+        r.raise_for_status()
+        result_list = r.json().get("result", {}).get("list", [])
+        if not result_list:
+            return 0.0
+        return float(result_list[0].get("lastPrice", 0) or 0)
+    except Exception:
+        return 0.0
