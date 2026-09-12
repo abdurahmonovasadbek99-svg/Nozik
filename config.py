@@ -53,11 +53,13 @@ SIGNAL_WEIGHTS = {
 }
 
 # --- Xabar yuborish uchun minimal umumiy score (0-100) ---
-ALERT_THRESHOLD = int(os.environ.get("ALERT_THRESHOLD", "65"))
+ALERT_THRESHOLD = int(os.environ.get("ALERT_THRESHOLD", "75"))
 
 # --- Hajm+BOS combo o'zi juda kuchli bo'lsa (tasdiqlangan breakout),
-# boshqa modullarni kutmasdan darhol signal yuborish uchun chegara ---
-STRONG_COMBO_THRESHOLD = int(os.environ.get("STRONG_COMBO_THRESHOLD", "80"))
+# boshqa modullarni kutmasdan darhol signal yuborish uchun chegara.
+# TUZATISH: 80 -> 92 ga oshirildi - bitta modulning yolg'iz signal
+# berish holatlari kamaytirildi (bu "confluence" tamoyilini buzardi) ---
+STRONG_COMBO_THRESHOLD = int(os.environ.get("STRONG_COMBO_THRESHOLD", "92"))
 
 # --- Skanerlash intervali (soniyada) ---
 SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
@@ -70,14 +72,18 @@ DB_PATH = os.environ.get("DB_PATH", "nozik.db")
 
 # --- Universe / Prescreen (kichik tokenlarni ham skanerlash uchun) ---
 QUOTE_ASSET = os.environ.get("QUOTE_ASSET", "USDT")
-MIN_24H_TURNOVER_USDT = float(os.environ.get("MIN_24H_TURNOVER_USDT", "200000"))
+# TUZATISH: 200,000 -> 1,500,000 ga oshirildi. Juda kam savdo qilinadigan
+# coinlarda spread katta va narx tasodifiy sakraydi - signal "kuchli"
+# ko'ringani bilan aslida shovqin bo'ladi.
+MIN_24H_TURNOVER_USDT = float(os.environ.get("MIN_24H_TURNOVER_USDT", "1500000"))
 MAX_CANDIDATES_PER_SCAN = int(os.environ.get("MAX_CANDIDATES_PER_SCAN", "40"))
 EXCLUDE_SYMBOLS = [
     s.strip() for s in os.environ.get("EXCLUDE_SYMBOLS", "").split(",") if s.strip()
 ]
 
 # --- Signal aniqligi: kamida nechta modul bir xil yo'nalishda rozi bo'lishi kerak ---
-MIN_SIGNAL_AGREEMENT = int(os.environ.get("MIN_SIGNAL_AGREEMENT", "2"))
+# TUZATISH: 2 -> 3 ga oshirildi (5 tadan 3tasi rozi bo'lishi shart)
+MIN_SIGNAL_AGREEMENT = int(os.environ.get("MIN_SIGNAL_AGREEMENT", "3"))
 
 # --- Signalni qachon baholash (necha soniyadan keyin natijani tekshirish) ---
 EVAL_AFTER_SECONDS = int(os.environ.get("EVAL_AFTER_SECONDS", "3600"))
