@@ -35,6 +35,7 @@ from config import (
 )
 from engine.aggregator import analyze_symbol, scan_watchlist
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats, get_stats_since
+from engine.chart import generate_candle_chart
 from signals.universe import get_candidates, get_current_price
 from keepalive import self_ping
 
@@ -43,6 +44,20 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("nozik")
+
+# Har bir modul uchun o'ziga xos emoji - xabarlarni tez o'qish uchun
+MODULE_EMOJIS = {
+    "volume_oi": "📊",
+    "whale": "🐋",
+    "ict_smc": "🧠",
+    "sentiment": "⚖️",
+    "volume_bos_combo": "💥",
+}
+
+
+def _module_line(name: str, sig: dict) -> str:
+    emoji = MODULE_EMOJIS.get(name, "•")
+    return f"{emoji} {name}: {sig['score']}/100 ({sig['direction']})"
 
 _last_alert_time = {}
 ALERT_COOLDOWN_SECONDS = 3600
@@ -110,8 +125,14 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"📊 {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
     for name, sig in result["signals"].items():
-        lines.append(f"• {name}: {sig['score']}/100 ({sig['direction']})")
-    await update.message.reply_text("\n".join(lines))
+        lines.append(_module_line(name, sig))
+    caption = "\n".join(lines)
+
+    chart_buf = generate_candle_chart(symbol, result.get("candles", []), result["direction"])
+    if chart_buf:
+        await update.message.reply_photo(photo=chart_buf, caption=caption)
+    else:
+        await update.message.reply_text(caption)
 
 
 async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -271,11 +292,17 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
             f"Narx: {price_value}\n\n"
         )
         for name, sig in r["signals"].items():
-            text += f"• {name}: {sig['score']}/100 ({sig['direction']})\n"
+            text += _module_line(name, sig) + "\n"
+
+        chart_buf = generate_candle_chart(symbol, r.get("candles", []), direction)
 
         for chat_id in ADMIN_CHAT_IDS:
             try:
-                await context.bot.send_message(chat_id=chat_id, text=text)
+                if chart_buf:
+                    chart_buf.seek(0)
+                    await context.bot.send_photo(chat_id=chat_id, photo=chart_buf, caption=text)
+                else:
+                    await context.bot.send_message(chat_id=chat_id, text=text)
             except Exception as e:
                 logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
 
