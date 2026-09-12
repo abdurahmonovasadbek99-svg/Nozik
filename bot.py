@@ -36,6 +36,7 @@ from config import (
 from engine.aggregator import analyze_symbol, scan_watchlist
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats, get_stats_since
 from engine.chart import generate_candle_chart
+from engine.trend_filter import get_trend, is_aligned
 from signals.universe import get_candidates, get_current_price
 from keepalive import self_ping
 
@@ -272,6 +273,17 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
 
         last_sent = _last_alert_time.get(symbol, 0)
         if now - last_sent < ALERT_COOLDOWN_SECONDS:
+            continue
+
+        # TUZATISH: 1 soatlik umumiy trendga qarshi signallarni o'tkazib
+        # yubormaslik uchun tekshiruv (whipsaw/shovqinni kamaytiradi)
+        try:
+            trend = await asyncio.to_thread(get_trend, symbol)
+        except Exception:
+            trend = "flat"
+
+        if not is_aligned(direction, trend):
+            logger.info(f"{symbol}: signal ({direction}) 1h trend ({trend}) bilan mos emas - o'tkazib yuborildi")
             continue
 
         _last_alert_time[symbol] = now
