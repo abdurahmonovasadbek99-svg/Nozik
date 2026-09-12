@@ -1,70 +1,64 @@
 """
-Sentiment signal moduli.
-LunarCrush API orqali ijtimoiy tarmoqlardagi mention hajmi va sentiment
-o'zgarishini kuzatadi. Keskin o'sish -> potensial pump signalining
-ijtimoiy tasdig'i.
+Sentiment signal moduli - BEPUL, COIN-SPETSIFIK versiya.
 
-TUZATISH: candles parametri interfeys bir xilligi uchun qo'shildi
-(aggregator barcha modullarga bir xil chaqiriq qiladi), lekin bu
-modul undan foydalanmaydi.
+TUZATISH: avval Fear & Greed Index ishlatilgan edi, lekin u BUTUN
+bozor uchun umumiy ko'rsatkich edi - kichik altcoinlar (masalan
+TMXUSDT, EVAAUSDT) ko'pincha umumiy bozordan mustaqil harakat qiladi,
+shuning uchun noto'g'ri yo'naltirishi mumkin edi.
+
+YANGI YECHIM: Bybit'ning har bir coin uchun alohida FUNDING RATE
+ma'lumotidan foydalanadi. Bu API kalit talab qilmaydi va aynan shu
+coin bo'yicha traderlar pozitsiyasini ko'rsatadi:
+- Funding rate juda musbat -> ko'pchilik long ochgan (crowd greed) ->
+  teskari (short) signal - haddan tashqari long'lar tez-tez likvidatsiya
+  bilan tugaydi
+- Funding rate juda manfiy -> ko'pchilik short ochgan (crowd fear) ->
+  teskari (long) signal
 """
 import requests
-from config import LUNARCRUSH_API_KEY
 
-LUNARCRUSH_BASE = "https://lunarcrush.com/api4/public"
+BYBIT_BASE = "https://api.bybit.com"
 
-# Bybit symbol (BTCUSDT) -> LunarCrush coin belgisi (btc)
-def _to_lc_symbol(symbol: str) -> str:
-    return symbol.replace("USDT", "").lower()
+# Chegaralar (funding rate, odatda har 8 soatda hisoblanadi)
+THRESHOLD_HIGH = 0.001    # 0.1%
+THRESHOLD_MED = 0.0005    # 0.05%
+THRESHOLD_LOW = 0.0002    # 0.02%
 
 
 def analyze(symbol: str, candles: list = None) -> dict:
-    if not LUNARCRUSH_API_KEY:
-        return {"score": 0, "direction": "neutral", "details": {"error": "API key yo'q"}}
-
-    coin = _to_lc_symbol(symbol)
-
     try:
         r = requests.get(
-            f"{LUNARCRUSH_BASE}/coins/{coin}/v1",
-            headers={"Authorization": f"Bearer {LUNARCRUSH_API_KEY}"},
+            f"{BYBIT_BASE}/v5/market/tickers",
+            params={"category": "linear", "symbol": symbol},
             timeout=10,
         )
         r.raise_for_status()
-        data = r.json().get("data", {})
+        result_list = r.json().get("result", {}).get("list", [])
+        if not result_list:
+            return {"score": 0, "direction": "neutral", "details": {"error": "ma'lumot topilmadi"}}
+        funding_rate = float(result_list[0].get("fundingRate", 0) or 0)
     except Exception as e:
         return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
 
-    social_volume_24h = data.get("social_volume_24h", 0)
-    social_volume_prev = data.get("social_volume_24h_previous", social_volume_24h) or 1
-    galaxy_score = data.get("galaxy_score", 50)  # 0-100, LunarCrush umumiy metrikasi
-    sentiment_pct = data.get("sentiment", 50)  # 0-100, ijobiy foiz
+    abs_rate = abs(funding_rate)
 
-    volume_change_pct = ((social_volume_24h - social_volume_prev) / social_volume_prev) * 100
+    if abs_rate >= THRESHOLD_HIGH:
+        score = 80
+    elif abs_rate >= THRESHOLD_MED:
+        score = 50
+    elif abs_rate >= THRESHOLD_LOW:
+        score = 25
+    else:
+        score = 0
 
-    score = 0
-    if volume_change_pct >= 100:
-        score += 50
-    elif volume_change_pct >= 50:
-        score += 30
-    elif volume_change_pct >= 20:
-        score += 15
-
-    if galaxy_score >= 70:
-        score += 30
-    elif galaxy_score >= 50:
-        score += 15
-
-    score = min(score, 100)
-
-    direction = "long" if sentiment_pct >= 60 else "short" if sentiment_pct <= 40 else "neutral"
+    if score == 0:
+        direction = "neutral"
+    else:
+        # Musbat funding -> crowd long -> teskari (short); manfiy -> teskari (long)
+        direction = "short" if funding_rate > 0 else "long"
 
     return {
         "score": score,
         "direction": direction,
-        "details": {
-            "social_volume_change_pct": round(volume_change_pct, 2),
-            "galaxy_score": galaxy_score,
-            "sentiment_pct": sentiment_pct,
-        },
+        "details": {"funding_rate": funding_rate, "funding_rate_pct": round(funding_rate * 100, 4)},
     }
