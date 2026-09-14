@@ -21,17 +21,39 @@ from config import (
 BYBIT_BASE = "https://api.bybit.com"
 
 
+# TUZATISH: avval har bir skanerlashda FAQAT eng yuqori 24 soatlik
+# hajmga ega top-MAX_CANDIDATES_PER_SCAN (standart 40) ta juftlik
+# olinar edi. Bu aynan asosiy maqsadga zid edi: chinakam kichik
+# altcoinlar (top-40dan tashqarida qolganlar) HECH QACHON
+# skanerlanmasdi, garchi ular MIN_24H_TURNOVER_USDT chegarasidan
+# o'tgan bo'lsa ham. Endi "asosiy" (eng likvid) qism har doim, qolgan
+# kichikroq coinlar esa navbat bilan (rotatsiya) - har skanerlashda
+# boshqa partiya - qamrab olinadi, shunda bir necha sikldan keyin
+# BARCHA nomzodlar tekshirilgan bo'ladi.
+_rotation_offset = 0
+
+# Har bir skanerlashda "asosiy" (eng yuqori hajmli, doim skanerlanadigan)
+# qism va navbat bilan aylanadigan qismning ulushi
+CORE_SLOTS_RATIO = 0.5
+
+
 def get_candidates() -> list:
     """
     Bybit linear (USDT-perpetual) bozoridagi barcha coinlarni oladi,
-    kam likvidlilarni (MIN_24H_TURNOVER_USDT dan past) chiqarib tashlaydi,
-    24 soatlik savdo hajmi bo'yicha kamayish tartibida saralaydi va
-    eng yuqoridagi MAX_CANDIDATES_PER_SCAN tasini qaytaradi.
+    kam likvidlilarni (MIN_24H_TURNOVER_USDT dan past) chiqarib tashlaydi.
+
+    Natija ikki qismdan iborat:
+    - "Core": eng yuqori hajmli CORE_SLOTS_RATIO ulushi - har doim skanerlanadi.
+    - "Rotation": qolgan barcha nomzodlar - har chaqiriqda navbatdagi
+      partiyasi qaytariladi, shunda bir necha skanerlash siklidan keyin
+      kichik altcoinlar ham albatta tekshirilgan bo'ladi.
 
     WATCHLIST'dagi coinlar har doim ro'yxatga kiritiladi (likvidlik
     filtridan qat'i nazar), chunki foydalanuvchi ularni doim kuzatishni
     xohlagan.
     """
+    global _rotation_offset
+
     try:
         r = requests.get(
             f"{BYBIT_BASE}/v5/market/tickers",
@@ -60,10 +82,23 @@ def get_candidates() -> list:
         scored.append((symbol, turnover))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    top_symbols = [s for s, _ in scored[:MAX_CANDIDATES_PER_SCAN]]
+    all_symbols = [s for s, _ in scored]
+
+    core_count = max(1, int(MAX_CANDIDATES_PER_SCAN * CORE_SLOTS_RATIO))
+    core_symbols = all_symbols[:core_count]
+    rotation_pool = all_symbols[core_count:]
+
+    rotation_batch_size = max(MAX_CANDIDATES_PER_SCAN - core_count, 0)
+    rotation_batch = []
+    if rotation_pool and rotation_batch_size > 0:
+        pool_len = len(rotation_pool)
+        _rotation_offset %= pool_len
+        for i in range(rotation_batch_size):
+            rotation_batch.append(rotation_pool[(_rotation_offset + i) % pool_len])
+        _rotation_offset = (_rotation_offset + rotation_batch_size) % pool_len
 
     # WATCHLIST har doim ro'yxatda bo'lishi kerak, takrorlanmasdan
-    combined = list(dict.fromkeys(WATCHLIST + top_symbols))
+    combined = list(dict.fromkeys(WATCHLIST + core_symbols + rotation_batch))
     return combined
 
 
