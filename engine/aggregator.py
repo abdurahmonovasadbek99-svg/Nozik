@@ -11,6 +11,7 @@ volume_bos_combo har biri alohida bir xil kline'ni yuklar edi
 from config import SIGNAL_WEIGHTS
 from signals import volume_oi, whale_tracker, ict_smc, sentiment, volume_bos_combo
 from signals.klines import get_klines
+from engine.volatility import compute_atr_pct, is_market_too_dead
 
 SIGNAL_MODULES = {
     "volume_oi": volume_oi,
@@ -33,6 +34,13 @@ def analyze_symbol(symbol: str) -> dict:
     """
     results = {}
     weighted_score = 0
+    # TUZATISH: yo'nalish ovozi ham SIGNAL_WEIGHTS bo'yicha og'irlashtiriladi.
+    # Avval bu yerda xom (weight'siz) score yig'ilardi - past og'irlikdagi
+    # modul (masalan sentiment, weight=10) yuqori raqamli score bersa,
+    # yuqori og'irlikdagi modul (ict_smc, weight=25) bilan yo'nalish
+    # tanlashda TENG kuchga ega bo'lib qolardi. Bu confluence tamoyilini
+    # buzardi: umumiy score weight bo'yicha hisoblanardi, lekin qaysi
+    # yo'nalish g'olib chiqishi weight'ga bog'liq bo'lmasdi.
     direction_votes = {"long": 0, "short": 0, "neutral": 0}
     direction_counts = {"long": 0, "short": 0, "neutral": 0}
 
@@ -51,13 +59,17 @@ def analyze_symbol(symbol: str) -> dict:
 
         results[name] = result
         weight = SIGNAL_WEIGHTS.get(name, 0)
-        weighted_score += (result["score"] / 100) * weight
-        direction_votes[result["direction"]] += result["score"]
+        module_weighted_score = (result["score"] / 100) * weight
+        weighted_score += module_weighted_score
+        direction_votes[result["direction"]] += module_weighted_score
         direction_counts[result["direction"]] += 1
 
     final_direction = max(direction_votes, key=direction_votes.get)
     if direction_votes[final_direction] == 0:
         final_direction = "neutral"
+
+    atr_pct = compute_atr_pct(candles)
+    dead_market = is_market_too_dead(candles)
 
     return {
         "symbol": symbol,
@@ -67,6 +79,8 @@ def analyze_symbol(symbol: str) -> dict:
         "signal_count": len(SIGNAL_MODULES),
         "signals": results,
         "candles": candles,
+        "atr_pct": round(atr_pct, 3),
+        "dead_market": dead_market,
     }
 
 
