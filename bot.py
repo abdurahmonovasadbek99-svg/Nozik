@@ -37,6 +37,7 @@ from engine.aggregator import analyze_symbol, scan_watchlist
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats, get_stats_since
 from engine.chart import generate_candle_chart
 from engine.trend_filter import get_trend, is_aligned
+from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals.universe import get_candidates, get_current_price
 from keepalive import self_ping
 
@@ -124,7 +125,9 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔍 {symbol} tekshirilmoqda...")
     result = await asyncio.to_thread(analyze_symbol, symbol)
 
-    lines = [f"📊 {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})\n"]
+    lines = [f"📊 {symbol} tahlili:\n", f"Umumiy score: {result['confluence_score']}/100 ({result['direction']})"]
+    lines.append(f"ATR (volatillik): {result.get('atr_pct', 0)}%" + (" ⚠️ juda past (o'lik bozor)" if result.get("dead_market") else ""))
+    lines.append("")
     for name, sig in result["signals"].items():
         lines.append(_module_line(name, sig))
     caption = "\n".join(lines)
@@ -146,7 +149,8 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Muvaffaqiyatli: {stats['successful']}\n"
         f"Aniqlik: {stats['accuracy_pct']}%\n"
         f"Kutilayotgan: {stats['pending']}\n"
-        f"O'rtacha o'zgarish: {stats['avg_pct_change']}%"
+        f"O'rtacha o'zgarish: {stats['avg_pct_change']}%\n"
+        f"Yaroqsiz (narx=0): {stats['invalid']}"
     )
     await update.message.reply_text(text)
 
@@ -245,6 +249,13 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
 
     now = time.time()
 
+    # YANGI: BTC bozor rejimini bitta skanerlash uchun BIR MARTA olamiz
+    # (har coin uchun alohida so'rov o'rniga - tezroq va samaraliroq)
+    try:
+        btc_regime = await asyncio.to_thread(get_btc_regime)
+    except Exception:
+        btc_regime = "neutral"
+
     for r in results:
         symbol = r["symbol"]
         score = r["confluence_score"]
@@ -271,6 +282,21 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
             score = combo_score
             trigger_reason = "🔥 Kuchli hajm+BOS tasdiqlash (alohida trigger)"
 
+        # YANGI: volatillik filtri - ATR juda past ("o'lik" bozor) bo'lsa,
+        # BOS/breakout signallari ko'pincha soxta bo'ladi - o'tkazib yuboramiz.
+        if r.get("dead_market"):
+            logger.info(f"{symbol}: bozor juda 'o'lik' (past ATR) - signal o'tkazib yuborildi")
+            continue
+
+        # YANGI: BTC bozor rejimiga qarshi signal - masalan BTC keskin
+        # tushayotganda altcoin uchun "long" - bunday holatda signal
+        # ishonchliligi past, o'tkazib yuboramiz.
+        if conflicts_with_btc_regime(symbol, direction, btc_regime):
+            logger.info(
+                f"{symbol}: signal ({direction}) BTC rejimiga ({btc_regime}) zid - o'tkazib yuborildi"
+            )
+            continue
+
         last_sent = _last_alert_time.get(symbol, 0)
         if now - last_sent < ALERT_COOLDOWN_SECONDS:
             continue
@@ -293,15 +319,22 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             price_value = 0
 
-        record_signal(symbol, direction, score, price_value or 0)
+        atr_pct = r.get("atr_pct", 0.0)
+        record_signal(symbol, direction, score, price_value or 0, atr_pct)
+
+        # YANGI: signal sifat darajasi - barcha modullar deyarli bir
+        # ovozdan rozi bo'lganda ("Premium"), oddiy holatda "Standard"
+        is_premium = agreement >= r["signal_count"] - 1 and score >= 85
+        tier_label = "💎 PREMIUM" if is_premium else "Standard"
 
         emoji = "🟢🚀" if direction == "long" else "🔴📉"
         text = (
-            f"{emoji} SIGNAL: {symbol}\n\n"
+            f"{emoji} SIGNAL: {symbol}  [{tier_label}]\n\n"
             + (f"{trigger_reason}\n\n" if trigger_reason else "")
             + f"Yo'nalish: {direction.upper()}\n"
             f"Confluence score: {score}/100 ({agreement}/{r['signal_count']} modul rozi)\n"
-            f"Narx: {price_value}\n\n"
+            f"Narx: {price_value}\n"
+            f"ATR (volatillik): {atr_pct}%\n\n"
         )
         for name, sig in r["signals"].items():
             text += _module_line(name, sig) + "\n"
