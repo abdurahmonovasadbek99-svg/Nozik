@@ -107,12 +107,19 @@ def analyze(symbol: str, candles: list = None) -> dict:
         direction = "short"
         ob = _find_order_block(candles, "bearish")
 
-    if sweep == "buy_side_sweep":
+    # TUZATISH: avval sweep BOS yo'nalishiga ZID bo'lsa ham (masalan
+    # bullish BOS + sell_side_sweep) score qo'shib yuborardi - bu
+    # qarama-qarshi ikkita signalni sun'iy kuchaytirardi. Endi sweep
+    # faqat mavjud yo'nalish bilan MOS kelsa yoki yo'nalish hali
+    # aniqlanmagan (neutral) bo'lsa qo'shiladi. Zid bo'lsa - bu
+    # signalning ishonchliligi past ekanini bildiradi, shuning uchun
+    # hisobga olinmaydi (BOS ustunligicha qoladi).
+    if sweep == "buy_side_sweep" and direction in ("neutral", "long"):
         score += 30
-        direction = "long" if direction == "neutral" else direction
-    elif sweep == "sell_side_sweep":
+        direction = "long"
+    elif sweep == "sell_side_sweep" and direction in ("neutral", "short"):
         score += 30
-        direction = "short" if direction == "neutral" else direction
+        direction = "short"
 
     if ob:
         score += 20
