@@ -10,13 +10,29 @@ ularning buy/sell tomonini solishtiradi.
 CHEKLOV: bu chinakam on-chain hamyon harakati emas, balki birjadagi
 katta yakka savdolarning proksisi. Lekin bepul va istalgan Bybit
 symbol uchun ishlaydi (TMX, EVA kabi kichik altcoinlar ham).
+
+TUZATISH: endi "whale" chegarasi FAQAT qat'iy $50k emas - shu
+symbolning o'zi so'nggi 1000 savdosidagi O'RTACHA savdo hajmiga
+NISBATAN ham baholanadi. Sabab: /v5/market/recent-trade "so'nggi N ta
+savdo"ni qaytaradi, vaqt oralig'ini emas. BTCUSDT kabi juda likvid
+coinlarda 1000 savdo bir necha soniyani qamrab olishi mumkin, kichik
+altcoinda esa bir necha soatni. Shu sababli qat'iy dollar chegarasi
+katta coin uchun juda oson, kichik/o'rtacha coin uchun deyarli
+imkonsiz bo'lib qolardi. Endi chegara: symbolning o'z tipik savdo
+hajmidan sezilarli darajada katta bo'lgan savdolar "whale" hisoblanadi
+(nisbiy), MIN_TRADE_USD esa faqat mutlaq quyi chegara sifatida qoladi.
 """
 import requests
 
 BYBIT_BASE = "https://api.bybit.com"
 
-# Minimal savdo qiymati (USD) - shundan katta yakka savdolar "whale" deb hisoblanadi
-MIN_TRADE_USD = 50_000
+# Minimal savdo qiymati (USD) - mutlaq quyi chegara, bundan kichik
+# savdolar hech qachon "whale" bo'la olmaydi (juda mayda coinlar uchun ham)
+MIN_TRADE_USD = 10_000
+
+# Bitta savdo "whale" deb hisoblanishi uchun, shu symbolning o'rtacha
+# savdo hajmidan necha barobar katta bo'lishi kerak
+WHALE_RELATIVE_MULTIPLIER = 8
 
 
 def analyze(symbol: str, candles: list = None, limit: int = 1000) -> dict:
@@ -31,21 +47,32 @@ def analyze(symbol: str, candles: list = None, limit: int = 1000) -> dict:
     except Exception as e:
         return {"score": 0, "direction": "neutral", "details": {"error": str(e)}}
 
-    buy_usd = 0.0
-    sell_usd = 0.0
-    whale_count = 0
-
+    trade_values = []
     for t in trades:
         try:
             price = float(t["price"])
             size = float(t["size"])
         except (KeyError, ValueError):
             continue
-        usd_value = price * size
-        if usd_value < MIN_TRADE_USD:
+        trade_values.append((price * size, t.get("side")))
+
+    if not trade_values:
+        return {"score": 0, "direction": "neutral", "details": {"whale_trades": 0}}
+
+    # TUZATISH: chegara endi shu symbolning o'z tipik savdo hajmiga
+    # nisbatan hisoblanadi (qarang: yuqoridagi modul docstring'i)
+    avg_trade_usd = sum(v for v, _ in trade_values) / len(trade_values)
+    whale_threshold = max(MIN_TRADE_USD, avg_trade_usd * WHALE_RELATIVE_MULTIPLIER)
+
+    buy_usd = 0.0
+    sell_usd = 0.0
+    whale_count = 0
+
+    for usd_value, side in trade_values:
+        if usd_value < whale_threshold:
             continue
         whale_count += 1
-        if t.get("side") == "Buy":
+        if side == "Buy":
             buy_usd += usd_value
         else:
             sell_usd += usd_value
@@ -56,11 +83,21 @@ def analyze(symbol: str, candles: list = None, limit: int = 1000) -> dict:
 
     imbalance_ratio = abs(buy_usd - sell_usd) / total
 
-    if total >= 5_000_000:
+    # TUZATISH: avval bu yerda mutlaq $ chegaralar (5M/2M/500k) ishlatilardi
+    # - bu BTCUSDT kabi coinlarni deyarli har doim "80 ball" bilan
+    # mukofotlab, kichik altcoinlarni deyarli hech qachon 40 balldan
+    # yuqoriga chiqarmasdi (chunki ularning umumiy savdo hajmi tabiiy
+    # ravishda kichik). Endi whale hajmi HAR BIR COIN o'zining shu
+    # oynadagi umumiy namuna hajmiga NISBATAN baholanadi - shunda katta
+    # va kichik coinlar taqqoslanadigan bo'ladi.
+    total_sampled_volume = sum(v for v, _ in trade_values)
+    whale_share = total / total_sampled_volume if total_sampled_volume > 0 else 0
+
+    if whale_share >= 0.5:
         base_score = 80
-    elif total >= 2_000_000:
+    elif whale_share >= 0.3:
         base_score = 60
-    elif total >= 500_000:
+    elif whale_share >= 0.15:
         base_score = 40
     else:
         base_score = 20
@@ -75,5 +112,6 @@ def analyze(symbol: str, candles: list = None, limit: int = 1000) -> dict:
             "buy_usd": round(buy_usd, 2),
             "sell_usd": round(sell_usd, 2),
             "whale_trades": whale_count,
+            "whale_share": round(whale_share, 3),
         },
     }
