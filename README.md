@@ -1,0 +1,2 @@
+# Nozik
+Bybit an Binance
