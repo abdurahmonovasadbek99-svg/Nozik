@@ -1,173 +1,194 @@
 """
-Signal Evaluator (AMD).
-Har bir yuborilgan signalni SQLite bazasiga yozadi va keyingi shamlarni
-kuzatib, natijasini R (risk birligi) da hisoblaydi:
+Signal Evaluator (AMD) — barcha taymfreymlar (15m, 1h, 4h, 1d) uchun BITTA jadval.
 
-  - SL urilsa                      -> -1R
-  - TP1 urilsa: 50% pozitsiya yopiladi, SL breakeven'ga suriladi
-      - keyin TP2 urilsa           -> 0.5*RR1 + 0.5*RR2
-      - keyin kirish narxiga qaytsa -> 0.5*RR1
-  - EXPIRE_CANDLES ichida hech biri bo'lmasa -> yopiladi (TP1 bo'lgan bo'lsa 0.5*RR1, aks holda 0R)
+Har yuborilgan signal bazaga yoziladi, keyingi YOPILGAN shamlar kuzatiladi va natija
+R (risk birligi) da hisoblanadi. Qoidalar — engine/sim.py (backtest bilan bir xil).
 
-Bir sham ichida SL ham, TP ham urilsa — SL hisoblanadi (konservativ).
-/pump_stats va hisobotlar shu yerdan ma'lumot oladi.
+  gross_r  = komissiyasiz natija
+  result_r = sof natija (komissiya + slippage ayrilgan) — statistika shundan hisoblanadi
+
+Cooldown ham shu bazadan olinadi (recently_signaled) — redeploy'dan keyin yo'qolmaydi
+(agar PostgreSQL ishlatilsa).
 """
-import sqlite3
+from __future__ import annotations
+
+import logging
 import time
+from typing import List, Optional
 
-from config import DB_PATH
+from config import FEE_PCT, SLIPPAGE_PCT
+from engine import db, sim
 
-
-def _conn():
-    return sqlite3.connect(DB_PATH)
+logger = logging.getLogger("nozik.evaluator")
 
 
 def init_db():
-    conn = _conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS amd_signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            symbol TEXT NOT NULL,
-            side TEXT NOT NULL,
-            score REAL NOT NULL,
-            entry REAL NOT NULL,
-            sl REAL NOT NULL,
-            tp1 REAL NOT NULL,
-            tp2 REAL NOT NULL,
-            rr1 REAL NOT NULL,
-            rr2 REAL NOT NULL,
-            sent_ts INTEGER NOT NULL,
-            checked_ts INTEGER NOT NULL,
-            candles_n INTEGER DEFAULT 0,
-            tp1_hit INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'open',
-            result_r REAL,
-            closed_ts INTEGER
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        _init()
+    except Exception as e:
+        if db.BACKEND == "postgres":
+            db.fallback_to_sqlite(str(e))
+            _init()
+        else:
+            raise
 
 
+def _init():
+    with db.tx() as conn:
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS signals (
+                id {db.id_column()},
+                symbol TEXT NOT NULL,
+                tf TEXT NOT NULL,
+                side TEXT NOT NULL,
+                score DOUBLE PRECISION NOT NULL,
+                entry DOUBLE PRECISION NOT NULL,
+                sl DOUBLE PRECISION NOT NULL,
+                tp1 DOUBLE PRECISION NOT NULL,
+                tp2 DOUBLE PRECISION NOT NULL,
+                rr1 DOUBLE PRECISION NOT NULL,
+                rr2 DOUBLE PRECISION NOT NULL,
+                sent_ts BIGINT NOT NULL,
+                checked_ts BIGINT NOT NULL,
+                candles_n INTEGER DEFAULT 0,
+                tp1_hit INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'open',
+                gross_r DOUBLE PRECISION,
+                result_r DOUBLE PRECISION,
+                closed_ts BIGINT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_status ON signals (status, tf)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_sym ON signals (symbol, tf, sent_ts)")
+
+
+# ------------------------------------------------------------------ yozish
 def record_signal(sig):
-    """sig: signals.amd_volume.Signal"""
-    conn = _conn()
-    conn.execute(
-        "INSERT INTO amd_signals (symbol, side, score, entry, sl, tp1, tp2, rr1, rr2, "
-        "sent_ts, checked_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (sig.symbol, sig.side, sig.score, sig.entry, sig.sl, sig.tp1, sig.tp2,
-         sig.rr1, sig.rr2, int(time.time()), sig.ts),
-    )
-    conn.commit()
-    conn.close()
+    """sig: signals.amd_volume.Signal (sig.tf = '15m' | '1h' | '4h' | '1d')"""
+    with db.tx() as conn:
+        conn.execute(
+            "INSERT INTO signals (symbol, tf, side, score, entry, sl, tp1, tp2, rr1, rr2, "
+            "sent_ts, checked_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sig.symbol, sig.tf, sig.side, sig.score, sig.entry, sig.sl, sig.tp1, sig.tp2,
+             sig.rr1, sig.rr2, int(time.time()), sig.ts),
+        )
 
 
-def evaluate_pending(get_klines_fn, interval: str = "15", expire_candles: int = 48) -> list:
-    """Ochiq signallarni yangi shamlar bilan tekshiradi.
-    Yangi yopilgan signallar ro'yxatini qaytaradi (bot ularni xabar qiladi)."""
-    conn = _conn()
-    rows = conn.execute(
-        "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit "
-        "FROM amd_signals WHERE status='open'"
-    ).fetchall()
+def recently_signaled(symbol: str, tf: str, cooldown_sec: int) -> bool:
+    """Shu coin shu taymfreymda cooldown ichida signal olganmi? (DB xato bersa — False)"""
+    try:
+        with db.tx() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM signals WHERE symbol=? AND tf=? AND sent_ts>=? LIMIT 1",
+                (symbol, tf, int(time.time()) - cooldown_sec),
+            ).fetchone()
+        return row is not None
+    except Exception as e:
+        logger.warning(f"cooldown tekshiruvi xatosi: {e}")
+        return False
+
+
+# --------------------------------------------------------------- baholash
+def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int) -> List[dict]:
+    """Shu taymfreymdagi ochiq signallarni yangi YOPILGAN shamlar bilan tekshiradi.
+    Yangi yopilganlar ro'yxatini qaytaradi."""
+    with db.tx() as conn:
+        rows = conn.execute(
+            "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit "
+            "FROM signals WHERE status='open' AND tf=?", (tf,)
+        ).fetchall()
 
     closed = []
-    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2,
-         checked, n, hit1) in rows:
+    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked, n, hit1) in rows:
         try:
-            c = get_klines_fn(symbol, interval, 200)
+            c = get_klines_fn(symbol, interval, 200)   # tarmoq — tranzaksiyadan TASHQARIDA
             if not c:
                 continue
-            c = c[:-1]  # faqat yopilgan shamlar
-            long_ = side == "LONG"
+            c = c[:-1]                                  # faqat yopilgan shamlar
             hit1 = bool(hit1)
-            status, result = "open", None
+            status: Optional[str] = None
+            gross: Optional[float] = None
 
             for x in c:
                 if x[0] <= checked:
                     continue
-                hi, lo = x[2], x[3]
                 checked = x[0]
                 n += 1
-                stop = entry if hit1 else sl
-                hit_sl = lo <= stop if long_ else hi >= stop
-                hit_tp1 = hi >= tp1 if long_ else lo <= tp1
-                hit_tp2 = hi >= tp2 if long_ else lo <= tp2
-
-                if hit_sl:
-                    status = "be" if hit1 else "sl"
-                    result = 0.5 * rr1 if hit1 else -1.0
-                    break
-                if not hit1 and hit_tp1:
-                    hit1 = True
-                if hit1 and hit_tp2:
-                    status, result = "tp2", 0.5 * rr1 + 0.5 * rr2
+                hit1, status, gross = sim.step(side, entry, sl, tp1, tp2, rr1, rr2,
+                                               hit1, x[2], x[3])
+                if status:
                     break
                 if n >= expire_candles:
                     status = "expired"
-                    result = 0.5 * rr1 if hit1 else 0.0
+                    gross = sim.expire_gross(side, entry, sl, rr1, hit1, x[4])
                     break
 
-            closed_ts = int(time.time()) if status != "open" else None
-            conn.execute(
-                "UPDATE amd_signals SET checked_ts=?, candles_n=?, tp1_hit=?, status=?, "
-                "result_r=?, closed_ts=? WHERE id=?",
-                (checked, n, int(hit1), status, result, closed_ts, row_id),
-            )
-            if status != "open":
-                closed.append({"symbol": symbol, "side": side,
-                               "status": status, "result_r": result})
-        except Exception:
-            # Bitta signal xato bersa (API down va h.k.) qolganlari davom etadi
+            if status:
+                net = gross - sim.cost_r(entry, sl, FEE_PCT, SLIPPAGE_PCT)
+                upd = ("UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=?, status=?, "
+                       "gross_r=?, result_r=?, closed_ts=? WHERE id=? AND status='open'")
+                args = (checked, n, int(hit1), status, gross, net, int(time.time()), row_id)
+                closed.append({"symbol": symbol, "tf": tf, "side": side, "status": status,
+                               "gross_r": gross, "result_r": net})
+            else:
+                upd = "UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=? WHERE id=? AND status='open'"
+                args = (checked, n, int(hit1), row_id)
+            with db.tx() as conn:
+                conn.execute(upd, args)
+        except Exception as e:
+            logger.warning(f"{symbol} [{tf}] baholashda xato: {e}")
             continue
-
-    conn.commit()
-    conn.close()
     return closed
 
 
+# ------------------------------------------------------------- statistika
 def _summary(rows) -> dict:
     n = len(rows)
-    wins = sum(1 for _, r in rows if r > 0)
-    total = sum(r for _, r in rows)
+    vals = [r for _, r in rows]
+    wins = sum(1 for r in vals if r > 0)
+    gains = sum(r for r in vals if r > 0)
+    losses = -sum(r for r in vals if r < 0)
     return {
         "total_closed": n,
         "wins": wins,
         "winrate_pct": round(wins / n * 100, 1) if n else 0,
-        "total_r": round(total, 2),
-        "avg_r": round(total / n, 2) if n else 0,
+        "total_r": round(sum(vals), 2),
+        "avg_r": round(sum(vals) / n, 2) if n else 0,
+        "profit_factor": round(gains / losses, 2) if losses > 0 else None,
         "best": max(rows, key=lambda x: x[1]) if rows else None,
         "worst": min(rows, key=lambda x: x[1]) if rows else None,
     }
 
 
-def get_stats() -> dict:
-    conn = _conn()
-    rows = conn.execute(
-        "SELECT symbol, result_r FROM amd_signals WHERE status!='open' AND result_r IS NOT NULL"
-    ).fetchall()
-    pending = conn.execute("SELECT COUNT(*) FROM amd_signals WHERE status='open'").fetchone()[0]
-    by_status = dict(conn.execute(
-        "SELECT status, COUNT(*) FROM amd_signals WHERE status!='open' GROUP BY status"
-    ).fetchall())
-    conn.close()
+def get_stats(tf: str) -> dict:
+    with db.tx() as conn:
+        rows = conn.execute(
+            "SELECT symbol, result_r FROM signals WHERE tf=? AND status!='open' "
+            "AND result_r IS NOT NULL", (tf,)).fetchall()
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM signals WHERE tf=? AND status='open'", (tf,)).fetchone()[0]
+        by_status = dict(conn.execute(
+            "SELECT status, COUNT(*) FROM signals WHERE tf=? AND status!='open' GROUP BY status",
+            (tf,)).fetchall())
+        gross = conn.execute(
+            "SELECT COALESCE(SUM(gross_r),0) FROM signals WHERE tf=? AND status!='open' "
+            "AND gross_r IS NOT NULL", (tf,)).fetchone()[0]
     out = _summary(rows)
-    out["pending"] = pending
-    out["by_status"] = by_status
+    out.update(pending=pending, by_status=by_status, gross_total_r=round(float(gross), 2))
     return out
 
 
-def get_stats_since(seconds_ago: int) -> dict:
-    conn = _conn()
+def get_stats_since(seconds_ago: int, tf: Optional[str] = None) -> dict:
     cutoff = int(time.time()) - seconds_ago
-    total_sent = conn.execute(
-        "SELECT COUNT(*) FROM amd_signals WHERE sent_ts >= ?", (cutoff,)
-    ).fetchone()[0]
-    rows = conn.execute(
-        "SELECT symbol, result_r FROM amd_signals WHERE status!='open' "
-        "AND result_r IS NOT NULL AND closed_ts >= ?", (cutoff,)
-    ).fetchall()
-    conn.close()
+    tf_sql, tf_args = ("AND tf=?", (tf,)) if tf else ("", ())
+    with db.tx() as conn:
+        total_sent = conn.execute(
+            f"SELECT COUNT(*) FROM signals WHERE sent_ts >= ? {tf_sql}", (cutoff, *tf_args)
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT symbol, result_r FROM signals WHERE status!='open' "
+            f"AND result_r IS NOT NULL AND closed_ts >= ? {tf_sql}", (cutoff, *tf_args)
+        ).fetchall()
     out = _summary(rows)
     out["total_sent"] = total_sent
     return out
