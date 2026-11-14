@@ -206,9 +206,9 @@ def _try(symbol, c, s, k, h1, bn) -> Optional[Signal]:
     # ---- scoring
     score = 50
     why = [
-        f"Accumulation: diapazon {wpct:.1f}%, hajm x{acc_ratio:.2f}",
-        f"Manipulation: sweep hajmi x{sv:.1f}, fitil {wick * 100:.0f}%",
-        f"Distribution: tasdiq hajmi x{cvr:.1f}",
+        f"Accumulation: диапазон {wpct:.1f}%, объём x{acc_ratio:.2f}",
+        f"Manipulation: объём sweep x{sv:.1f}, тень {wick * 100:.0f}%",
+        f"Distribution: объём подтверждения x{cvr:.1f}",
     ]
     score += 10 if sv >= 3 else 6 if sv >= 2.2 else 0
     score += 8 if cvr >= 2 else 4 if cvr >= 1.6 else 0
@@ -225,17 +225,17 @@ def _try(symbol, c, s, k, h1, bn) -> Optional[Signal]:
             aligned = up if side == "LONG" else (not up)
             if bratio >= 1.5 and aligned:
                 score += 10
-                why.append(f"Binance hajmi tasdiqladi x{bratio:.1f}")
+                why.append(f"Binance: объём подтвердил x{bratio:.1f}")
             elif bratio < 1.0 or not aligned:
                 score -= 8
-                why.append("Binance hajmi tasdiqlamadi")
+                why.append("Binance: объём не подтвердил")
 
     if h1 and len(h1) >= 25:
         closes = [x[4] for x in h1]
         e = _ema(closes[-60:], 21)
         if (side == "LONG" and closes[-1] > e) or (side == "SHORT" and closes[-1] < e):
             score += 7
-            why.append("1h trend yo'nalishga mos")
+            why.append("1h: тренд совпадает с направлением")
 
     return Signal(symbol=symbol, side=side, entry=entry, sl=sl, tp1=tp1, tp2=tp2,
                   rr1=rr1, rr2=rr2, risk_pct=risk_pct, score=min(score, 100),
