@@ -14,7 +14,7 @@ RED = "#ef5350"
 
 
 def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral",
-                          levels: dict = None) -> BytesIO:
+                          levels: dict = None, tf_label: str = "15m") -> BytesIO:
     """Sham ro'yxatidan PNG rasm (BytesIO) yasaydi. Bo'sh bo'lsa None qaytaradi.
     levels (ixtiyoriy): range_high, range_low, entry, sl, tp1, tp2 — gorizontal chiziqlar."""
     if not candles:
@@ -50,7 +50,7 @@ def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral"
 
     dir_colors = {"long": GREEN, "short": RED, "neutral": "#999999"}
     dir_label = {"long": "LONG", "short": "SHORT", "neutral": "NEUTRAL"}.get(direction, direction.upper())
-    ax.set_title(f"{symbol}  •  15m", color="white", fontsize=13, pad=28)
+    ax.set_title(f"{symbol}  •  {tf_label}", color="white", fontsize=13, pad=28)
     ax.text(
         0.5, 1.06, dir_label, transform=ax.transAxes, ha="center",
         color=dir_colors.get(direction, "white"), fontsize=12, fontweight="bold",
