@@ -36,8 +36,10 @@ ALERT_COOLDOWN_SECONDS = int(os.environ.get("ALERT_COOLDOWN_SECONDS", "14400"))
 # Maksimal risk: kirish bilan SL orasidagi masofa (% da)
 MAX_RISK_PCT = float(os.environ.get("MAX_RISK_PCT", "3.5"))
 
-# --- Skanerlash intervali (soniyada). 900 = 15 daqiqa (shamlar bilan mos) ---
-SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "900"))
+# --- 15m modul skanerlash intervali (soniyada). 300 = 5 daqiqa, 600 = 10 daqiqa ---
+# Skaner soat bo'yicha tekislanadi (:00, :05, :10 ...) — yangi 15m sham yopilgach
+# ~15 soniyada signal tekshiriladi.
+SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
 
 # --- Universe: faqat KICHIK tokenlar ---
 # 24 soatlik savdo hajmi (USDT) shu oraliqda bo'lgan juftliklar skanerlanadi.

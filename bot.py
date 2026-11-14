@@ -9,6 +9,7 @@ import asyncio
 import datetime
 import logging
 import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import Update, ReplyKeyboardMarkup, BotCommand
@@ -39,6 +40,7 @@ from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals import amd_volume as amd
 from signals.amd_volume import CFG, bybit_klines, check, scan
 from keepalive import self_ping
+from signals import amd_swing
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -73,8 +75,8 @@ REASON_EMOJIS = {
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["🔍 Skanerlash", "📈 Statistika"],
-        ["📊 Hisobot", "⚙️ Sozlamalar"],
+        ["🔍 Сканирование", "📈 Статистика"],
+        ["📊 Отчёт", "⚙️ Настройки"],
     ],
     resize_keyboard=True,
 )
@@ -103,14 +105,15 @@ def _to_dicts(candles: list) -> list:
 
 def _format_signal(s) -> str:
     emoji = "🟢🚀" if s.side == "LONG" else "🔴📉"
-    tier = "💎 PREMIUM" if s.score >= 85 else "Standard"
+    tier = "💎 PREMIUM" if s.score >= 85 else "Стандарт"
     text = (
-        f"{emoji} SIGNAL: {s.symbol}  [{tier}]\n\n"
-        f"Yo'nalish: {s.side}\n"
-        f"AMD score: {s.score}/100\n\n"
-        f"Kirish: {_p(s.entry)}\n"
-        f"SL: {_p(s.sl)} (risk {s.risk_pct:.2f}%)\n"
-        f"TP1: {_p(s.tp1)} (RR {s.rr1:.2f}) — 50% yopish, SL breakeven'ga\n"
+        f"{emoji} СИГНАЛ: {s.symbol}  [{tier}]\n"
+        f"⏱ Таймфрейм: 15m (тренд-фильтр 1h)\n\n"
+        f"Направление: {s.side}\n"
+        f"AMD-скор: {s.score}/100\n\n"
+        f"Вход: {_p(s.entry)}\n"
+        f"SL: {_p(s.sl)} (риск {s.risk_pct:.2f}%)\n"
+        f"TP1: {_p(s.tp1)} (RR {s.rr1:.2f}) — закрыть 50%, SL в безубыток\n"
         f"TP2: {_p(s.tp2)} (RR {s.rr2:.2f})\n\n"
     )
     for r in s.reasons:
@@ -164,44 +167,69 @@ async def _run_scan(bot):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
-        await update.message.reply_text("Bu bot shaxsiy ishlatiladi. Kirish rad etildi.")
+        uid = update.effective_user.id if update.effective_user else "?"
+        await update.message.reply_text(
+            "Этот бот приватный — доступ закрыт.\n"
+            f"Ваш Telegram ID: {uid}\n"
+            "Отправьте этот ID владельцу бота, чтобы он добавил вас."
+        )
         return
     await update.message.reply_text(
-        "🤖 Nozik Bot v3 ishga tushdi.\n\n"
-        "Strategiya: AMD (Accumulation → Manipulation → Distribution) + "
-        "Bybit/Binance hajm tahlili. Asosiy e'tibor — kichik tokenlar.\n\n"
-        "Pastdagi menyudan foydalaning yoki buyruqlarni yozing:\n"
-        "/scan - hozir bozorni tekshirish\n"
-        "/check <SYMBOL> - bitta coinni tekshirish (masalan /check PEPEUSDT)\n"
-        "/backtest <SYMBOL> - tarixiy sinov\n"
-        "/pump_stats - umumiy signal statistikasi\n"
-        "/report - so'nggi 24 soat va 7 kunlik hisobot\n"
-        "/settings - joriy sozlamalar",
+        "🤖 Nozik Bot v3 запущен.\n\n"
+        "Стратегия: AMD (Accumulation → Manipulation → Distribution) + "
+        "анализ объёмов Bybit/Binance. Основной фокус — малокапитализированные токены.\n\n"
+        "Сигналы по трём уровням:\n"
+        "• 15m (тренд-фильтр 1h)\n"
+        "• 1h (тренд-фильтр 4h)\n"
+        "• 4h (тренд-фильтр 1d)\n\n"
+        "Команды:\n"
+        "/scan — проверить рынок (15m)\n"
+        "/swing — проверить рынок (1h и 4h)\n"
+        "/check <SYMBOL> — один токен, 15m (например /check PEPEUSDT)\n"
+        "/swing_check <SYMBOL> 1h|4h — один токен, 1h/4h\n"
+        "/backtest <SYMBOL> — бэктест 15m\n"
+        "/swing_backtest <SYMBOL> 1h|4h — бэктест 1h/4h\n"
+        "/pump_stats — статистика 15m\n"
+        "/swing_stats — статистика 1h/4h\n"
+        "/report — отчёт за 24 часа и 7 дней\n"
+        "/settings — текущие настройки\n"
+        "/myid — ваш Telegram ID",
         reply_markup=MAIN_MENU,
+    )
+
+
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Доступна ВСЕМ: показывает Telegram ID, чтобы владелец мог добавить человека."""
+    user = update.effective_user
+    if user is None:
+        return
+    await update.message.reply_text(
+        f"Ваш Telegram ID: {user.id}\n"
+        "Отправьте его владельцу бота, чтобы получать сигналы."
     )
 
 
 async def cmd_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
-        await update.message.reply_text("Ruxsat yo'q.")
+        await update.message.reply_text("Нет доступа.")
         return
     if _scan_lock.locked():
-        await update.message.reply_text("⏳ Skanerlash allaqachon ketmoqda, biroz kuting.")
+        await update.message.reply_text("⏳ Сканирование уже идёт, подождите немного.")
         return
-    await update.message.reply_text("🔍 Kichik tokenlar AMD bo'yicha tekshirilmoqda, 1-2 daqiqa kuting...")
+    await update.message.reply_text("🔍 Проверяю малые токены по AMD, подождите 1–2 минуты...")
     try:
         sent, skipped, found = await _run_scan(context.bot)
     except Exception as e:
         logger.error(f"Skanerlashda xato: {e}")
-        await update.message.reply_text("❌ Skanerlashda xato yuz berdi. Loglarni tekshiring.")
+        await update.message.reply_text("❌ Ошибка при сканировании. Проверьте логи.")
         return
-    text = f"📊 Skanerlash tugadi ({amd.LAST_SCAN['count']} juftlik tekshirildi).\n"
+    text = f"📊 Сканирование завершено (проверено пар: {amd.LAST_SCAN['count']}).\n"
     if found == 0:
-        text += "Hozircha AMD shartlariga mos signal yo'q."
+        text += "Сигналов, подходящих под условия AMD, пока нет."
     else:
-        text += f"Yuborilgan signal: {sent}"
+        text += f"Отправлено сигналов: {sent}"
         if skipped:
-            text += f"\nBTC oqimiga zid bo'lgani uchun o'tkazib yuborilgan: {skipped}"
+            text += f"\nПропущено из-за противоположного тренда BTC: {skipped}"
     await update.message.reply_text(text)
 
 
@@ -209,44 +237,44 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         return
     if not context.args:
-        await update.message.reply_text("Iltimos, coin belgisini kiriting. Masalan: /check PEPEUSDT")
+        await update.message.reply_text("Укажите символ токена. Например: /check PEPEUSDT")
         return
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"🔍 {symbol} tekshirilmoqda...")
+    await update.message.reply_text(f"🔍 Проверяю {symbol}...")
     res = await asyncio.to_thread(check, symbol)
     if not res:
-        await update.message.reply_text("❌ Ma'lumot olib bo'lmadi (symbolni tekshiring).")
+        await update.message.reply_text("❌ Не удалось получить данные (проверьте символ).")
         return
 
     sig, st = res["signal"], res["state"]
-    lines = [f"📊 {symbol} tahlili:\n"]
+    lines = [f"📊 Анализ {symbol}:\n"]
     levels = None
     direction = "neutral"
     if sig:
         direction = sig.side.lower()
         levels = _levels(sig)
         ok = sig.score >= ALERT_THRESHOLD
-        lines.append(f"AMD setup topildi: {sig.side}, score {sig.score}/100")
-        lines.append("✅ Signal chegarasidan o'tadi" if ok else
-                     f"⚠️ Score chegaradan ({ALERT_THRESHOLD}) past — signal yuborilmaydi")
-        lines.append(f"Kirish {_p(sig.entry)} | SL {_p(sig.sl)} | TP1 {_p(sig.tp1)} | TP2 {_p(sig.tp2)}")
+        lines.append(f"Найден AMD-сетап: {sig.side}, скор {sig.score}/100")
+        lines.append("✅ Проходит порог сигнала" if ok else
+                     f"⚠️ Скор ниже порога ({ALERT_THRESHOLD}) — сигнал отправлен не будет")
+        lines.append(f"Вход {_p(sig.entry)} | SL {_p(sig.sl)} | TP1 {_p(sig.tp1)} | TP2 {_p(sig.tp2)}")
         lines.append("")
         for r in sig.reasons:
             lines.append(_reason_line(r))
     else:
-        lines.append("AMD setup hozir yo'q.")
+        lines.append("AMD-сетапа сейчас нет.")
         if st:
             levels = {"range_high": st["range_high"], "range_low": st["range_low"]}
             lines.append("")
-            lines.append(f"Diapazon: {st['range_pct']:.1f}% " +
-                         ("✅" if st["tight"] else "❌ (shartga mos emas)"))
-            lines.append(f"Diapazon hajmi: x{st['acc_ratio']:.2f} " +
-                         ("✅ jim" if st["quiet"] else "❌ jim emas"))
-            lines.append(f"Oxirgi sham hajmi: x{st['last_vol_x']:.1f}")
+            lines.append(f"Диапазон: {st['range_pct']:.1f}% " +
+                         ("✅" if st["tight"] else "❌ (не подходит)"))
+            lines.append(f"Объём диапазона: x{st['acc_ratio']:.2f} " +
+                         ("✅ тихий" if st["quiet"] else "❌ не тихий"))
+            lines.append(f"Объём последней свечи: x{st['last_vol_x']:.1f}")
             if st["tight"] and st["quiet"]:
-                lines.append("📦 Accumulation bosqichida — manipulyatsiyani kuzating.")
+                lines.append("📦 Идёт фаза Accumulation — следите за манипуляцией.")
         else:
-            lines.append("Tahlil uchun yetarli tarix yo'q.")
+            lines.append("Недостаточно истории для анализа.")
     caption = "\n".join(lines)
 
     chart_buf = generate_candle_chart(symbol, _to_dicts(res["candles"]), direction, levels)
@@ -260,21 +288,21 @@ async def cmd_backtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         return
     if not context.args:
-        await update.message.reply_text("Iltimos, coin belgisini kiriting. Masalan: /backtest PEPEUSDT")
+        await update.message.reply_text("Укажите символ токена. Например: /backtest PEPEUSDT")
         return
     symbol = context.args[0].upper()
-    await update.message.reply_text(f"🧪 {symbol} tarixiy sinov ketmoqda...")
+    await update.message.reply_text(f"🧪 {symbol}: идёт бэктест...")
     r = await asyncio.to_thread(amd.backtest, symbol)
     if not r:
-        await update.message.reply_text("❌ Ma'lumot olib bo'lmadi (symbolni tekshiring).")
+        await update.message.reply_text("❌ Не удалось получить данные (проверьте символ).")
         return
     await update.message.reply_text(
-        f"🧪 {r['symbol']} (so'nggi ~10 kun, 15m)\n\n"
-        f"Bitimlar: {r['trades']}\n"
-        f"Foydali: {r['wins']} ({r['winrate']}%)\n"
-        f"O'rtacha: {r['avg_R']}R\n"
-        f"Jami: {r['total_R']}R\n\n"
-        "Eslatma: bitta coin uchun bitimlar kam bo'ladi — 10-15 ta coinda sinab ko'ring."
+        f"🧪 {r['symbol']} (последние ~10 дней, 15m)\n\n"
+        f"Сделок: {r['trades']}\n"
+        f"Прибыльных: {r['wins']} ({r['winrate']}%)\n"
+        f"Среднее: {r['avg_R']}R\n"
+        f"Итого: {r['total_R']}R\n\n"
+        "Примечание: по одному токену сделок мало — проверьте на 10–15 токенах."
     )
 
 
@@ -284,14 +312,14 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = get_stats()
     bs = st["by_status"]
     text = (
-        "📈 Signal statistikasi:\n\n"
-        f"Yopilgan signallar: {st['total_closed']}\n"
-        f"Foydali: {st['wins']} ({st['winrate_pct']}%)\n"
-        f"Jami natija: {st['total_r']:+.2f}R\n"
-        f"O'rtacha: {st['avg_r']:+.2f}R\n"
-        f"Kutilayotgan (ochiq): {st['pending']}\n\n"
+        "📈 Статистика сигналов (15m):\n\n"
+        f"Закрытых сигналов: {st['total_closed']}\n"
+        f"Прибыльных: {st['wins']} ({st['winrate_pct']}%)\n"
+        f"Итого: {st['total_r']:+.2f}R\n"
+        f"Среднее: {st['avg_r']:+.2f}R\n"
+        f"Открытых (в ожидании): {st['pending']}\n\n"
         f"TP2: {bs.get('tp2', 0)} | TP1+BE: {bs.get('be', 0)} | "
-        f"SL: {bs.get('sl', 0)} | Muddati tugagan: {bs.get('expired', 0)}"
+        f"SL: {bs.get('sl', 0)} | По истечении срока: {bs.get('expired', 0)}"
     )
     await update.message.reply_text(text)
 
@@ -300,18 +328,21 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         return
     text = (
-        "⚙️ Joriy sozlamalar:\n\n"
-        f"Strategiya: AMD + Bybit/Binance hajm\n"
-        f"Timeframe: {CFG['tf']}m (trend filtri: 1h)\n"
-        f"Minimal score: {ALERT_THRESHOLD}/100\n"
-        f"Maks. risk: {MAX_RISK_PCT}%\n"
-        f"Universe: 24s hajm {MIN_24H_TURNOVER_USDT/1e6:g}M — {MAX_24H_TURNOVER_USDT/1e6:g}M USDT "
-        f"(maks. {MAX_CANDIDATES_PER_SCAN} juftlik)\n"
-        f"Skanerlash: har {SCAN_INTERVAL_SECONDS // 60} daqiqada\n"
-        f"Cooldown: {ALERT_COOLDOWN_SECONDS // 3600} soat\n"
-        f"BTC filtri: {'yoqilgan' if USE_BTC_FILTER else 'o‘chirilgan'}\n"
-        f"Signal muddati: {EXPIRE_CANDLES * 15 // 60} soat\n\n"
-        "O'zgartirish: Render → Environment Variables."
+        "⚙️ Текущие настройки:\n\n"
+        "Стратегия: AMD + объёмы Bybit/Binance\n"
+        f"Таймфрейм 15m: тренд-фильтр 1h\n"
+        f"Таймфреймы {', '.join(amd_swing.ENABLED)}: тренд-фильтр "
+        f"{', '.join(amd_swing.PROFILES[t]['htf_label'] for t in amd_swing.ENABLED)}\n"
+        f"Минимальный скор: {ALERT_THRESHOLD}/100\n"
+        f"Макс. риск: {MAX_RISK_PCT}%\n"
+        f"Фильтр рынка: оборот за 24ч {MIN_24H_TURNOVER_USDT/1e6:g}M — {MAX_24H_TURNOVER_USDT/1e6:g}M USDT "
+        f"(макс. {MAX_CANDIDATES_PER_SCAN} пар)\n"
+        f"Сканирование 15m: каждые {SCAN_INTERVAL_SECONDS // 60} мин\n"
+        f"Cooldown: {ALERT_COOLDOWN_SECONDS // 3600} ч\n"
+        f"BTC-фильтр: {'включён' if USE_BTC_FILTER else 'выключен'}\n"
+        f"Срок сигнала 15m: {EXPIRE_CANDLES * 15 // 60} ч\n"
+        f"Пользователей с доступом: {len(ADMIN_CHAT_IDS)}\n\n"
+        "Изменить: Render → Environment Variables."
     )
     await update.message.reply_text(text)
 
@@ -321,33 +352,33 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = update.message.text
 
-    if text == "🔍 Skanerlash":
+    if text == "🔍 Сканирование":
         await cmd_scan(update, context)
-    elif text == "📈 Statistika":
+    elif text == "📈 Статистика":
         await cmd_pump_stats(update, context)
-    elif text == "📊 Hisobot":
+    elif text == "📊 Отчёт":
         await cmd_report(update, context)
-    elif text == "⚙️ Sozlamalar":
+    elif text == "⚙️ Настройки":
         await cmd_settings(update, context)
     else:
         await update.message.reply_text(
-            "Tushunmadim. Pastdagi menyudan tanlang yoki /check SYMBOL kabi buyruq yozing."
+            "Не понял. Выберите пункт в меню внизу или введите команду, например /check SYMBOL."
         )
 
 
 def _format_period_report(title: str, stats: dict) -> str:
-    lines = [f"{title}\n", f"Yuborilgan signallar: {stats['total_sent']}"]
+    lines = [f"{title}\n", f"Отправлено сигналов: {stats['total_sent']}"]
     if stats["total_closed"] > 0:
-        lines.append(f"Yopilgan: {stats['total_closed']}")
-        lines.append(f"Foydali: {stats['wins']} ({stats['winrate_pct']}%)")
-        lines.append(f"Jami natija: {stats['total_r']:+.2f}R")
-        lines.append(f"O'rtacha: {stats['avg_r']:+.2f}R")
+        lines.append(f"Закрыто: {stats['total_closed']}")
+        lines.append(f"Прибыльных: {stats['wins']} ({stats['winrate_pct']}%)")
+        lines.append(f"Итого: {stats['total_r']:+.2f}R")
+        lines.append(f"Среднее: {stats['avg_r']:+.2f}R")
         if stats["best"]:
-            lines.append(f"Eng yaxshi: {stats['best'][0]} ({stats['best'][1]:+.2f}R)")
+            lines.append(f"Лучший: {stats['best'][0]} ({stats['best'][1]:+.2f}R)")
         if stats["worst"]:
-            lines.append(f"Eng yomon: {stats['worst'][0]} ({stats['worst'][1]:+.2f}R)")
+            lines.append(f"Худший: {stats['worst'][0]} ({stats['worst'][1]:+.2f}R)")
     else:
-        lines.append("Hali yopilgan signal yo'q.")
+        lines.append("Закрытых сигналов пока нет.")
     return "\n".join(lines)
 
 
@@ -357,16 +388,16 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     daily = get_stats_since(86400)
     weekly = get_stats_since(604800)
     text = (
-        _format_period_report("📅 So'nggi 24 soat", daily)
+        _format_period_report("📅 Последние 24 часа", daily)
         + "\n\n"
-        + _format_period_report("🗓 So'nggi 7 kun", weekly)
+        + _format_period_report("🗓 Последние 7 дней", weekly)
     )
     await update.message.reply_text(text)
 
 
 async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(86400)
-    text = _format_period_report("📅 Kunlik hisobot", stats)
+    text = _format_period_report("📅 Дневной отчёт", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -376,7 +407,7 @@ async def scheduled_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
     stats = get_stats_since(604800)
-    text = _format_period_report("🗓 Haftalik hisobot", stats)
+    text = _format_period_report("🗓 Недельный отчёт", stats)
     for chat_id in ADMIN_CHAT_IDS:
         try:
             await context.bot.send_message(chat_id=chat_id, text=text)
@@ -385,10 +416,10 @@ async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
 
 
 RESULT_TEXT = {
-    "tp2": "✅✅ TP2 urildi",
-    "be": "✅ TP1 olindi, qolgani breakeven'da yopildi",
-    "sl": "❌ SL urildi",
-    "expired": "⏱ Muddati tugadi",
+    "tp2": "✅✅ TP2 достигнут",
+    "be": "✅ TP1 взят, остаток закрыт в безубытке",
+    "sl": "❌ Сработал SL",
+    "expired": "⏱ Срок сигнала истёк",
 }
 
 
@@ -440,13 +471,18 @@ def run_health_server():
 
 async def _post_init(app: Application):
     await app.bot.set_my_commands([
-        BotCommand("start", "Botni ishga tushirish / menyu"),
-        BotCommand("scan", "Bozorni hozir tekshirish"),
-        BotCommand("check", "Bitta coinni tekshirish"),
-        BotCommand("backtest", "Tarixiy sinov"),
-        BotCommand("pump_stats", "Umumiy signal statistikasi"),
-        BotCommand("report", "24 soat / 7 kunlik hisobot"),
-        BotCommand("settings", "Joriy sozlamalar"),
+        BotCommand("start", "Запуск / меню"),
+        BotCommand("scan", "Проверить рынок (15m)"),
+        BotCommand("check", "Проверить один токен"),
+        BotCommand("backtest", "Бэктест (15m)"),
+        BotCommand("pump_stats", "Статистика сигналов 15m"),
+        BotCommand("report", "Отчёт за 24ч / 7 дней"),
+        BotCommand("settings", "Текущие настройки"),
+        BotCommand("swing", "Проверить рынок (1h и 4h)"),
+        BotCommand("swing_check", "1h/4h: один токен"),
+        BotCommand("swing_backtest", "1h/4h: бэктест"),
+        BotCommand("swing_stats", "Статистика 1h/4h")
+        ,BotCommand("myid", "Ваш Telegram ID"),
     ])
 
 
@@ -465,6 +501,7 @@ def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_post_init).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("myid", cmd_myid))
     app.add_handler(CommandHandler("scan", cmd_scan))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("backtest", cmd_backtest))
@@ -473,7 +510,11 @@ def main():
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_text))
 
-    app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=10)
+    amd_swing.register(app)  # 1h (trend 4h) va 4h (trend 1d) AMD moduli
+
+    # Скан выравнивается по часам: :00, :05, :10 ... (+15 с после закрытия свечи)
+    first_scan = SCAN_INTERVAL_SECONDS - (time.time() % SCAN_INTERVAL_SECONDS) + 15
+    app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=first_scan)
     app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60)
     app.job_queue.run_repeating(self_ping, interval=SELF_PING_INTERVAL_SECONDS, first=300)
     app.job_queue.run_daily(
