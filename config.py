@@ -38,9 +38,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ADMIN_CHAT_IDS = _parse_admin_ids(os.environ.get("ADMIN_CHAT_IDS", ""))
 
 # --- AMD strategiyasi ---
-ALERT_THRESHOLD = _i("ALERT_THRESHOLD", "70")
-ALERT_COOLDOWN_SECONDS = _i("ALERT_COOLDOWN_SECONDS", "14400")
-MAX_RISK_PCT = _f("MAX_RISK_PCT", "3.5")
+ALERT_THRESHOLD = _i("ALERT_THRESHOLD", "62")
+ALERT_COOLDOWN_SECONDS = _i("ALERT_COOLDOWN_SECONDS", "7200")
+MAX_RISK_PCT = _f("MAX_RISK_PCT", "5")
 SCAN_INTERVAL_SECONDS = _i("SCAN_INTERVAL_SECONDS", "300")
 
 # MSS/FVG: 1 bo'lsa kamida bittasi bo'lmagan signal umuman yuborilmaydi.
@@ -49,8 +49,8 @@ REQUIRE_STRUCTURE = os.environ.get("REQUIRE_STRUCTURE", "0") == "1"
 
 # --- Universe: faqat KICHIK tokenlar ---
 MIN_24H_TURNOVER_USDT = _f("MIN_24H_TURNOVER_USDT", "3000000")
-MAX_24H_TURNOVER_USDT = _f("MAX_24H_TURNOVER_USDT", "120000000")
-MAX_CANDIDATES_PER_SCAN = _i("MAX_CANDIDATES_PER_SCAN", "150")
+MAX_24H_TURNOVER_USDT = _f("MAX_24H_TURNOVER_USDT", "300000000")
+MAX_CANDIDATES_PER_SCAN = _i("MAX_CANDIDATES_PER_SCAN", "400")
 EXCLUDE_SYMBOLS = [
     s.strip() for s in os.environ.get("EXCLUDE_SYMBOLS", "").split(",") if s.strip()
 ]
@@ -66,7 +66,7 @@ SLIPPAGE_PCT = _f("SLIPPAGE_PCT", "0.07")
 # --- "Poezdga yetib olish" filtri ---
 # Signal kelgan paytdagi narx kirishdan TP tomonga shuncha R dan ko'p ketgan bo'lsa,
 # signal o'tkazib yuboriladi (kirish narxi eskirgan; RR buzilgan).
-MAX_CHASE_R = _f("MAX_CHASE_R", "0.5")
+MAX_CHASE_R = _f("MAX_CHASE_R", "0.8")
 
 # --- Signal natijasini kuzatish ---
 EXPIRE_CANDLES = _i("EXPIRE_CANDLES", "48")          # 15m uchun: 48 = 12 soat
