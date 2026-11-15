@@ -31,13 +31,14 @@ from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats
 from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals import amd_volume as amd
 from signals.amd_volume import CFG, bybit_klines, check
-from keepalive import self_ping
+from keepalive import start_self_ping
 from signals import amd_swing
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)  # token URL'da chiqmasin
 logger = logging.getLogger("nozik")
 
 _scan_lock = asyncio.Lock()
@@ -373,7 +374,8 @@ async def background_scan(context: ContextTypes.DEFAULT_TYPE):
     if _scan_lock.locked():
         return
     try:
-        await _run_scan(context.bot)
+        sent, skipped, found = await _run_scan(context.bot)
+        logger.info(f"Skan: topildi={found}, yuborildi={sent}, o'tkazildi={skipped}")
     except Exception as e:
         logger.error(f"Skanerlashda xato: {e}")
 
@@ -450,7 +452,7 @@ def main():
     first_scan = SCAN_INTERVAL_SECONDS - (time.time() % SCAN_INTERVAL_SECONDS) + 15
     app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=first_scan)
     app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60)
-    app.job_queue.run_repeating(self_ping, interval=SELF_PING_INTERVAL_SECONDS, first=300)
+    start_self_ping()
     app.job_queue.run_daily(
         scheduled_daily_report,
         time=datetime.time(hour=DAILY_REPORT_HOUR_UTC, minute=0),

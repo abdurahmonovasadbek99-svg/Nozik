@@ -1,28 +1,40 @@
 """
-Keepalive / Self-ping moduli.
+Keepalive / Self-ping moduli (v2).
 
-Render bepul tarifi ~15 daqiqa tashqi trafik bo'lmasa xizmatni
-uxlatib qo'yadi. Shu modul o'z manziliga (RENDER_EXTERNAL_URL)
-muntazam so'rov yuborib, xizmatni doim "uyg'oq" ushlab turadi.
-
-TUZATISH: requests sinxron (blocking) — endi asyncio.to_thread
-orqali chaqiriladi, event loop muzlamaydi.
+Render bepul tarifi ~15 daqiqa TASHQI HTTP trafik bo'lmasa xizmatni uxlatadi.
+Bu modul alohida oqimda (thread) o'z ommaviy manziliga (RENDER_EXTERNAL_URL)
+har ~4 daqiqada so'rov yuboradi. Alohida oqim ishlatilgani uchun event loop
+yoki job_queue muammo bo'lsa ham ping to'xtamaydi. Har ping logga yoziladi.
 """
-import asyncio
 import logging
+import threading
+import time
+
 import requests
 
-from config import SELF_PING_URL
+from config import SELF_PING_URL, SELF_PING_INTERVAL_SECONDS
 
 logger = logging.getLogger("nozik.keepalive")
 
 
-async def self_ping(context):
-    """job_queue.run_repeating orqali muntazam chaqiriladi."""
+def _loop():
+    time.sleep(30)
+    fails = 0
+    while True:
+        try:
+            r = requests.get(SELF_PING_URL, timeout=20)
+            logger.info(f"Self-ping OK: {r.status_code}")
+            fails = 0
+        except Exception as e:
+            fails += 1
+            logger.warning(f"Self-ping xato ({fails}): {e}")
+        time.sleep(min(SELF_PING_INTERVAL_SECONDS, 240) if fails == 0 else 60)
+
+
+def start_self_ping():
     if not SELF_PING_URL:
-        logger.warning("SELF_PING_URL bo'sh — RENDER_EXTERNAL_URL topilmadi, self-ping o'chirilgan.")
+        logger.warning("RENDER_EXTERNAL_URL topilmadi — self-ping ISHLAMAYDI. "
+                       "Servis Web Service ekanini yoki SELF_PING_URL env berilganini tekshiring.")
         return
-    try:
-        await asyncio.to_thread(requests.get, SELF_PING_URL, timeout=10)
-    except Exception as e:
-        logger.warning(f"Self-ping muvaffaqiyatsiz: {e}")
+    threading.Thread(target=_loop, daemon=True, name="self-ping").start()
+    logger.info(f"Self-ping ishga tushdi: {SELF_PING_URL}")
