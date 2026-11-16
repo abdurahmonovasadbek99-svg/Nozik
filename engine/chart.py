@@ -38,15 +38,16 @@ T = {
     "dist": "D · Distribution",
     "range_high": "Range High",
     "range_low": "Range Low",
-    "entry": "ENTRY",
-    "sl": "STOP LOSS",
-    "quality": "SIGNAL SIFATI",
-    "htf": "Yuqori TF",
-    "htf_up": "o'sish ↑",
-    "htf_down": "tushish ↓",
-    "htf_na": "yo'q",
+    "entry": "ВХОД",
+    "sl": "СТОП-ЛОСС",
+    "quality": "КАЧЕСТВО СИГНАЛА",
+    "htf": "Старший ТФ",
+    "htf_up": "рост ↑",
+    "htf_down": "падение ↓",
+    "htf_na": "нет данных",
+    "risk": "Риск",
     "footer": "A · Accumulation   →   M · Manipulation   →   D · Distribution",
-    "disclaimer": "Moliyaviy maslahat emas. Riskni 1–2% bilan cheklang.",
+    "disclaimer": "Не является финансовой рекомендацией. Рискуйте не более 1–2% депозита.",
 }
 
 
@@ -259,7 +260,7 @@ def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral"
                     arrowprops=dict(arrowstyle="-", color=PURPLE, lw=0.8, shrinkA=2, shrinkB=2))
 
         items = [
-            ("ENTRY", entry, TXT, False),
+            (T["entry"], entry, TXT, False),
             ("SL", sl, RED, True),
             ("TP1", tp1, GREEN, True),
             ("TP2", tp2, GREEN, True),
@@ -318,7 +319,7 @@ def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral"
             htf_txt = T["htf_up"] if up else T["htf_down"]
         parts = [f"{T['htf']}{' ' + htf if htf else ''}: {htf_txt}"]
         if meta.get("risk_pct") is not None:
-            parts.append(f"Risk {meta['risk_pct']:.2f}%")
+            parts.append(f"{T['risk']} {meta['risk_pct']:.2f}%")
         if rr1 and rr2:
             parts.append(f"R:R 1:{rr1:.1f} – 1:{rr2:.1f}")
         ov.text(56, qy0 + 58, "  •  ".join(parts), color=MUTED, fontsize=6.6, va="center", zorder=3)

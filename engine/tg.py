@@ -47,7 +47,7 @@ def reason_line(text: str) -> str:
 
 
 def format_signal(s, P: dict) -> str:
-    """Signal matni (Telegram HTML). Rasm izohi (caption) sifatida yuboriladi — parse_mode="HTML"."""
+    """Текст сигнала (Telegram HTML) — подпись к картинке, parse_mode="HTML"."""
     from engine.chart import grade_of
 
     is_long = s.side == "LONG"
@@ -57,40 +57,39 @@ def format_signal(s, P: dict) -> str:
     risk = abs(s.entry - s.sl)
     limit_px = s.entry + P["max_chase_r"] * risk * (1 if is_long else -1)
     hours = P["expire_candles"] * P["tf_hours"]
-    dur = f"~{hours:.0f} soat" if hours < 48 else f"~{hours / 24:.1f} kun"
+    dur = f"~{hours:.0f} ч" if hours < 48 else f"~{hours / 24:.1f} дн."
     cost = sim.cost_r(s.entry, s.sl, P["fee_pct"], P["slip_pct"])
 
     def pct(v: float) -> str:
         return f"{(v - s.entry) / s.entry * 100:+.2f}%"
 
-    conf = [f"Sweep hajmi x{s.sweep_x:.1f}"] if s.sweep_x else ["Sweep"]
+    conf = [f"объём sweep x{s.sweep_x:.1f}"] if s.sweep_x else ["sweep"]
     if s.mss:
         conf.append("MSS")
     if s.fvg:
         conf.append("FVG")
     if s.bn_ok is True:
-        conf.append("Binance hajm ✓")
+        conf.append("объём Binance ✓")
     if s.htf_ok is True:
-        conf.append(f"{P['htf_label']} trend ✓")
+        conf.append(f"тренд {P['htf_label']} ✓")
 
     line = "━━━━━━━━━━━━━━━━"
-    text = (
+    return (
         f"{dot} <b>{s.side} · {s.symbol} · {s.tf}</b>{premium}\n"
         f"{line}\n"
-        f"🎯 Kirish: <code>{p(s.entry)}</code>\n"
+        f"🎯 Вход: <code>{p(s.entry)}</code>\n"
         f"🛑 SL: <code>{p(s.sl)}</code>  <i>({pct(s.sl)})</i>\n"
         f"✅ TP1: <code>{p(s.tp1)}</code>  <i>({pct(s.tp1)})</i>\n"
         f"✅ TP2: <code>{p(s.tp2)}</code>  <i>({pct(s.tp2)})</i>\n"
         f"{line}\n"
-        f"⭐ Sifat: <b>{grade}</b> ({s.score}/100)\n"
-        f"🧩 Konfluens: {' · '.join(conf)}\n"
+        f"⭐ Качество: <b>{grade}</b> ({s.score}/100)\n"
+        f"🧩 Конфлюэнс: {' · '.join(conf)}\n"
         f"🧭 AMD: Accumulation → Manipulation → Distribution\n"
-        f"📦 Diapazon {s.range_pct:.1f}% · hajm x{s.acc_ratio:.2f}\n"
-        f"⚖️ R:R 1:{s.rr1:.1f} – 1:{s.rr2:.1f} · xarajat ≈ {cost:.2f}R\n"
-        f"⏱ Muddat: {dur} · narxni quvmang: <code>{p(limit_px)}</code> gacha\n"
-        f"💡 TP1 da 50% yoping, SL ni breakevenga suring"
+        f"📦 Диапазон {s.range_pct:.1f}% · объём x{s.acc_ratio:.2f}\n"
+        f"⚖️ R:R 1:{s.rr1:.1f} – 1:{s.rr2:.1f} · издержки ≈ {cost:.2f}R\n"
+        f"⏱ Срок: {dur} · не догонять: до <code>{p(limit_px)}</code>\n"
+        f"💡 На TP1 закрыть 50%, SL — в безубыток"
     )
-    return text
 
 
 def levels_of(s) -> dict:
