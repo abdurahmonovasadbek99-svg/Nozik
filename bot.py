@@ -64,8 +64,8 @@ def _all_tfs() -> list:
 
 async def _send_signal(bot, s):
     buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
-                              tg.levels_of(s), s.tf)
-    await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf)
+                              tg.levels_of(s), s.tf, tg.meta_of(s, CFG))
+    await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf, parse_mode="HTML")
 
 
 async def _run_scan(bot, force: bool = False):
