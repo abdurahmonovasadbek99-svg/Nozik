@@ -33,7 +33,7 @@
 - engine/chart.py: butunlay yangi. Qora-ko'k karta: sarlavha + LONG/SHORT tugmasi, A·M·D belgilari
   (Accumulation qutisi, Manipulation sweep belgisi, Distribution), SL/ENTRY/TP1/TP2 zonalari,
   4 ta ko'rsatkich qutisi (narx, %, R), SIGNAL SIFATI (A+/A/B/C/D + progress), konfluens chiplari.
-- engine/tg.py: signal matni HTML (<b>, <code>, <i>) va o'zbekcha; parse_mode="HTML" qo'shildi;
+- engine/tg.py: signal matni HTML (<b>, <code>, <i>) va русский; parse_mode="HTML" qo'shildi;
   meta_of(); to_dicts() endi vaqt (ts) ham beradi.
 - signals/amd_volume.py: Signal'ga sweep_i, range_i, mss, fvg, bn_ok, htf_ok, sweep_x ... maydonlari qo'shildi
   (strategiya mantig'i O'ZGARMAGAN, faqat karta uchun ma'lumot saqlanadi).
