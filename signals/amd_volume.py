@@ -90,6 +90,17 @@ class Signal:
     reasons: List[str] = field(default_factory=list)
     candles: list = field(default_factory=list, repr=False)
     tf: str = "15m"
+    # --- chart / karta uchun qo'shimcha ma'lumot (candles bo'lagiga nisbatan indekslar) ---
+    sweep_i: int = -1          # Manipulation (sweep) shamining indeksi
+    range_i: int = 0           # Accumulation diapazoni boshlanish indeksi
+    mss: bool = False
+    fvg: bool = False
+    bn_ok: Optional[bool] = None   # Binance hajm tasdig'i (None = ma'lumot yo'q)
+    htf_ok: Optional[bool] = None  # yuqori taymfreym trendi mos keladimi
+    acc_ratio: float = 0.0
+    range_pct: float = 0.0
+    sweep_x: float = 0.0
+    confirm_x: float = 0.0
 
 
 # ----------------------------------------------------------------- helpers
@@ -266,6 +277,7 @@ def _try(symbol, c, s, k, h1, bn, P) -> Optional[Signal]:
         score -= 6
         why.append("Structure: нет MSS/FVG")
 
+    bn_ok = None
     n_b = P["base_n"]
     if bn is None:
         why.append("Binance: данных нет — проверка пропущена")
@@ -276,23 +288,30 @@ def _try(symbol, c, s, k, h1, bn, P) -> Optional[Signal]:
             up = bn[-1][4] > bn[-4][4]
             aligned = up if side == "LONG" else (not up)
             if bratio >= 1.5 and aligned:
+                bn_ok = True
                 score += 10
                 why.append(f"Binance: объём подтвердил x{bratio:.1f}")
             elif bratio < 1.0 or not aligned:
+                bn_ok = False
                 score -= 8
                 why.append("Binance: объём не подтвердил")
 
+    htf_ok = None
     if h1 and len(h1) >= 25:
         closes = [x[4] for x in h1]
         e = _ema(closes[-60:], 21)
-        if (side == "LONG" and closes[-1] > e) or (side == "SHORT" and closes[-1] < e):
+        htf_ok = (side == "LONG" and closes[-1] > e) or (side == "SHORT" and closes[-1] < e)
+        if htf_ok:
             score += 7
             why.append(f"{P['htf_label']}: тренд совпадает с направлением")
 
     return Signal(symbol=symbol, side=side, entry=entry, sl=sl, tp1=tp1, tp2=tp2,
                   rr1=rr1, rr2=rr2, risk_pct=risk_pct, score=max(0, min(score, 100)),
                   range_high=rh, range_low=rl, ts=ck[0], reasons=why,
-                  candles=c[max(0, k - 59):k + 1], tf=P["label"])
+                  candles=c[max(0, k - 59):k + 1], tf=P["label"],
+                  sweep_i=s - max(0, k - 59), range_i=max(0, w0 - max(0, k - 59)),
+                  mss=bool(mss), fvg=bool(fvg), bn_ok=bn_ok, htf_ok=htf_ok,
+                  acc_ratio=acc_ratio, range_pct=wpct, sweep_x=sv, confirm_x=cvr)
 
 
 # -------------------------------------------------------------- data fetch

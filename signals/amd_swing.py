@@ -129,8 +129,8 @@ async def _run(bot, force: bool = False):
                     continue
                 await asyncio.to_thread(record_signal, s)
                 buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
-                                          tg.levels_of(s), s.tf)
-                await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf)
+                                          tg.levels_of(s), s.tf, tg.meta_of(s, P))
+                await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML")
                 sent += 1
     return sent, found
 
@@ -175,8 +175,8 @@ async def cmd_swing_check(update, context):
           else f"⚠️ Скор ниже порога ({MIN_SCORE}) — сигнал отправлен не будет")
     caption = tg.format_signal(sig, P) + "\n" + ok
     buf = await tg.make_chart(symbol, tg.to_dicts(sig.candles), sig.side.lower(),
-                              tg.levels_of(sig), prof)
-    await tg.reply_with_chart(update.message, caption, buf)
+                              tg.levels_of(sig), prof, tg.meta_of(sig, P))
+    await tg.reply_with_chart(update.message, caption, buf, parse_mode="HTML")
 
 
 async def cmd_swing_backtest(update, context):
