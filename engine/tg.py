@@ -47,27 +47,49 @@ def reason_line(text: str) -> str:
 
 
 def format_signal(s, P: dict) -> str:
-    emoji = "🟢🚀" if s.side == "LONG" else "🔴📉"
-    tier = "💎 PREMIUM" if s.score >= 85 else "Стандарт"
+    """Signal matni (Telegram HTML). Rasm izohi (caption) sifatida yuboriladi — parse_mode="HTML"."""
+    from engine.chart import grade_of
+
+    is_long = s.side == "LONG"
+    dot = "🟢" if is_long else "🔴"
+    premium = "  💎 PREMIUM" if s.score >= 85 else ""
+    grade, _ = grade_of(s.score)
     risk = abs(s.entry - s.sl)
-    limit_px = s.entry + P["max_chase_r"] * risk * (1 if s.side == "LONG" else -1)
+    limit_px = s.entry + P["max_chase_r"] * risk * (1 if is_long else -1)
     hours = P["expire_candles"] * P["tf_hours"]
-    dur = f"~{hours:.0f} ч" if hours < 48 else f"~{hours / 24:.1f} дн."
+    dur = f"~{hours:.0f} soat" if hours < 48 else f"~{hours / 24:.1f} kun"
     cost = sim.cost_r(s.entry, s.sl, P["fee_pct"], P["slip_pct"])
+
+    def pct(v: float) -> str:
+        return f"{(v - s.entry) / s.entry * 100:+.2f}%"
+
+    conf = [f"Sweep hajmi x{s.sweep_x:.1f}"] if s.sweep_x else ["Sweep"]
+    if s.mss:
+        conf.append("MSS")
+    if s.fvg:
+        conf.append("FVG")
+    if s.bn_ok is True:
+        conf.append("Binance hajm ✓")
+    if s.htf_ok is True:
+        conf.append(f"{P['htf_label']} trend ✓")
+
+    line = "━━━━━━━━━━━━━━━━"
     text = (
-        f"{emoji} СИГНАЛ {s.tf}: {s.symbol}  [{tier}]\n"
-        f"⏱ Таймфрейм: {s.tf} (тренд-фильтр {P['htf_label']})\n\n"
-        f"Направление: {s.side}\n"
-        f"AMD-скор: {s.score}/100\n\n"
-        f"Вход: {p(s.entry)}  (не догонять: допустимо до {p(limit_px)})\n"
-        f"SL: {p(s.sl)} (риск {s.risk_pct:.2f}%)\n"
-        f"TP1: {p(s.tp1)} (RR {s.rr1:.2f}) — закрыть 50%, SL в безубыток\n"
-        f"TP2: {p(s.tp2)} (RR {s.rr2:.2f})\n"
-        f"Издержки (комиссия+проскальзывание) ≈ {cost:.2f}R\n"
-        f"Срок сигнала: {dur}\n\n"
+        f"{dot} <b>{s.side} · {s.symbol} · {s.tf}</b>{premium}\n"
+        f"{line}\n"
+        f"🎯 Kirish: <code>{p(s.entry)}</code>\n"
+        f"🛑 SL: <code>{p(s.sl)}</code>  <i>({pct(s.sl)})</i>\n"
+        f"✅ TP1: <code>{p(s.tp1)}</code>  <i>({pct(s.tp1)})</i>\n"
+        f"✅ TP2: <code>{p(s.tp2)}</code>  <i>({pct(s.tp2)})</i>\n"
+        f"{line}\n"
+        f"⭐ Sifat: <b>{grade}</b> ({s.score}/100)\n"
+        f"🧩 Konfluens: {' · '.join(conf)}\n"
+        f"🧭 AMD: Accumulation → Manipulation → Distribution\n"
+        f"📦 Diapazon {s.range_pct:.1f}% · hajm x{s.acc_ratio:.2f}\n"
+        f"⚖️ R:R 1:{s.rr1:.1f} – 1:{s.rr2:.1f} · xarajat ≈ {cost:.2f}R\n"
+        f"⏱ Muddat: {dur} · narxni quvmang: <code>{p(limit_px)}</code> gacha\n"
+        f"💡 TP1 da 50% yoping, SL ni breakevenga suring"
     )
-    for r in s.reasons:
-        text += reason_line(r) + "\n"
     return text
 
 
@@ -76,8 +98,15 @@ def levels_of(s) -> dict:
             "entry": s.entry, "sl": s.sl, "tp1": s.tp1, "tp2": s.tp2}
 
 
+def meta_of(s, P: dict) -> dict:
+    """Chart kartasi uchun qo'shimcha ma'lumot (sifat, MSS/FVG, indekslar...)."""
+    return {"score": s.score, "ts": s.ts, "rr1": s.rr1, "rr2": s.rr2, "risk_pct": s.risk_pct,
+            "sweep_i": s.sweep_i, "range_i": s.range_i, "mss": s.mss, "fvg": s.fvg,
+            "bn_ok": s.bn_ok, "htf_ok": s.htf_ok, "htf": P.get("htf_label", "")}
+
+
 def to_dicts(candles: list) -> list:
-    return [{"open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in candles]
+    return [{"ts": c[0], "open": c[1], "high": c[2], "low": c[3], "close": c[4]} for c in candles]
 
 
 def format_backtest(r: dict, P: dict, days: Optional[float] = None) -> str:
@@ -109,37 +138,37 @@ def format_backtest(r: dict, P: dict, days: Optional[float] = None) -> str:
     return "\n".join(lines)
 
 
-async def send_with_chart(bot, chat_id, text: str, buf) -> None:
+async def send_with_chart(bot, chat_id, text: str, buf, parse_mode=None) -> None:
     """Admin chat'ga rasm + matn. Matn sig'masa — alohida xabar."""
     if buf is not None:
         buf.seek(0)
         if len(text) <= CAPTION_LIMIT:
-            await bot.send_photo(chat_id=chat_id, photo=buf, caption=text)
+            await bot.send_photo(chat_id=chat_id, photo=buf, caption=text, parse_mode=parse_mode)
             return
         await bot.send_photo(chat_id=chat_id, photo=buf)
-    await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT])
+    await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode)
 
 
-async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None) -> None:
+async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None, parse_mode=None) -> None:
     for chat_id in chat_ids:
         try:
-            await send_with_chart(bot, chat_id, text, buf)
+            await send_with_chart(bot, chat_id, text, buf, parse_mode)
         except Exception as e:
             logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
 
 
-async def reply_with_chart(message, text: str, buf) -> None:
+async def reply_with_chart(message, text: str, buf, parse_mode=None) -> None:
     if buf is not None:
         buf.seek(0)
         if len(text) <= CAPTION_LIMIT:
-            await message.reply_photo(photo=buf, caption=text)
+            await message.reply_photo(photo=buf, caption=text, parse_mode=parse_mode)
             return
         await message.reply_photo(photo=buf)
-    await message.reply_text(text[:MESSAGE_LIMIT])
+    await message.reply_text(text[:MESSAGE_LIMIT], parse_mode=parse_mode)
 
 
-async def make_chart(symbol, candles, direction, levels, tf_label):
+async def make_chart(symbol, candles, direction, levels, tf_label, meta=None):
     """matplotlib og'ir — event loop'ni bloklamaslik uchun threadda."""
     from engine.chart import generate_candle_chart
     return await asyncio.to_thread(generate_candle_chart, symbol, candles, direction,
-                                   levels, tf_label)
+                                   levels, tf_label, meta)
