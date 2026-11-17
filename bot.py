@@ -418,7 +418,11 @@ async def _post_init(app: Application):
     ])
 
 
+CARD_VERSION = "v5-RU"
+
+
 def main():
+    logger.info("Карточка сигнала: %s (русский интерфейс)", CARD_VERSION)
     if not TELEGRAM_BOT_TOKEN:
         raise SystemExit(
             "XATO: TELEGRAM_BOT_TOKEN topilmadi! "
