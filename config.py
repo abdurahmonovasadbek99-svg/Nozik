@@ -58,6 +58,28 @@ EXCLUDE_SYMBOLS = [
 # --- BTC filtri ---
 USE_BTC_FILTER = os.environ.get("USE_BTC_FILTER", "1") == "1"
 
+# --- Pump/Dump detektori (AMD'dan ALOHIDA modul: signals/pump_detector.py) ---
+USE_PUMP_DETECTOR = os.environ.get("USE_PUMP_DETECTOR", "1") == "1"
+PUMP_SCAN_INTERVAL_SECONDS = _i("PUMP_SCAN_INTERVAL_SECONDS", "60")
+PUMP_MIN_TURNOVER_USDT = _f("PUMP_MIN_TURNOVER_USDT", "1000000")      # AMD'dan past: 1M
+PUMP_MAX_TURNOVER_USDT = _f("PUMP_MAX_TURNOVER_USDT", "300000000")
+PUMP_MOVE_5M_PCT = _f("PUMP_MOVE_5M_PCT", "3")        # 5 daqiqada shuncha % harakat
+PUMP_MOVE_15M_PCT = _f("PUMP_MOVE_15M_PCT", "5")      # yoki 15 daqiqada shuncha %
+PUMP_VOL_X = _f("PUMP_VOL_X", "3")                    # hajm oddiydan necha marta oshgan bo'lishi kerak
+PUMP_MAX_EXT_PCT = _f("PUMP_MAX_EXT_PCT", "15")       # 30 daqiqada shundan ko'p ketgan bo'lsa - kech
+PUMP_MAX_RISK_PCT = _f("PUMP_MAX_RISK_PCT", "5")      # taxminiy SL masofasi shundan katta bo'lsa - o'tkazib yuboriladi
+PUMP_MIN_SCORE = _i("PUMP_MIN_SCORE", "70")
+PUMP_COOLDOWN_SECONDS = _i("PUMP_COOLDOWN_SECONDS", "1800")   # bir coin, bir yo'nalish
+PUMP_MIN_WINDOW_TURNOVER_USDT = _f("PUMP_MIN_WINDOW_TURNOVER_USDT", "30000")  # oxirgi 5 daq. oborot (noto'g'ri tezlik filtri)
+PUMP_MAX_ALERTS_PER_SCAN = _i("PUMP_MAX_ALERTS_PER_SCAN", "4")
+PUMP_MAX_ALERTS_PER_HOUR = _i("PUMP_MAX_ALERTS_PER_HOUR", "15")  # bozor qulaganda spamdan himoya
+PUMP_MAX_CANDIDATES = _i("PUMP_MAX_CANDIDATES", "25")          # bir skanda 1m shamlari tekshiriladigan max coin
+PUMP_EXPIRE_CANDLES = _i("PUMP_EXPIRE_CANDLES", "24")          # 5m shamlar: 24 = 2 soat
+PUMP_STRICT = os.environ.get("PUMP_STRICT", "1") == "1"       # qat'iy rejim: faqat aniq harakat (tavsiya)
+PUMP_BREAKOUT_HOURS = _i("PUMP_BREAKOUT_HOURS", "6")          # shuncha soatlik diapazon chegarasi buzilishi kerak
+PUMP_SEND_CHART = os.environ.get("PUMP_SEND_CHART", "1") == "1"  # xabarga grafik biriktirish
+PUMP_BACKTEST_BARS = _i("PUMP_BACKTEST_BARS", "7200")         # 1m shamlar: 7200 = 5 kun
+
 # --- Haqiqiy xarajatlar (BIR TOMON uchun, %). Backtest va statistika R'dan ayriladi ---
 # Bybit USDT-perp taker ~0.055%. Slippage kichik tokenlarda 0.05-0.15% bo'lishi mumkin.
 FEE_PCT = _f("FEE_PCT", "0.055")

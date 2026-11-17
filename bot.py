@@ -32,7 +32,7 @@ from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals import amd_volume as amd
 from signals.amd_volume import CFG, bybit_klines, check
 from keepalive import start_self_ping
-from signals import amd_swing
+from signals import amd_swing, pump_detector
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -121,6 +121,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/swing_backtest_top 1h|4h — бэктест 1h/4h по топ-токенам\n"
         "/pump_stats — статистика 15m\n"
         "/swing_stats — статистика 1h/4h\n"
+        "/pd_scan — проверить резкие движения (pump/dump)\n"
+        "/pd_check <SYMBOL> — pump/dump-статус одной монеты\n"
+        "/pd_stats — статистика детектора pump/dump\n"
+        "/pd_backtest [SYMBOL] — бэктест pump/dump\n"
         "/report — отчёт за 24 часа и 7 дней\n"
         "/settings — текущие настройки\n"
         "/myid — ваш Telegram ID",
@@ -287,6 +291,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Срок сигнала 15m: {CFG['expire_candles'] * 15 // 60} ч\n"
         f"База данных: {db.BACKEND}\n"
         f"Пользователей с доступом: {len(ADMIN_CHAT_IDS)}\n\n"
+        + pump_detector.settings_text() + "\n"
         "Изменить: Render → Environment Variables."
     )
     await update.message.reply_text(text)
@@ -312,7 +317,7 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _format_period_report(title: str, seconds: int) -> str:
-    total = get_stats_since(seconds)
+    total = get_stats_since(seconds, exclude_tf=pump_detector.TF)   # AMD — pump'siz
     lines = [f"{title}\n", f"Отправлено сигналов: {total['total_sent']}"]
     if total["total_closed"] > 0:
         pf = f" | PF {total['profit_factor']}" if total["profit_factor"] is not None else ""
@@ -333,6 +338,12 @@ def _format_period_report(title: str, seconds: int) -> str:
             lines.append("По таймфреймам: " + " | ".join(parts))
     else:
         lines.append("Закрытых сигналов пока нет.")
+    pd = get_stats_since(seconds, pump_detector.TF)
+    if pd["total_sent"]:
+        lines.append("")
+        lines.append(f"🚀 Pump/Dump (отдельно): отправлено {pd['total_sent']}"
+                     + (f", закрыто {pd['total_closed']}, {pd['total_r']:+.2f}R"
+                        if pd["total_closed"] else ""))
     return "\n".join(lines)
 
 
@@ -414,11 +425,15 @@ async def _post_init(app: Application):
         BotCommand("swing_backtest", "1h/4h: бэктест"),
         BotCommand("swing_backtest_top", "1h/4h: бэктест по топ-токенам"),
         BotCommand("swing_stats", "Статистика 1h/4h"),
+        BotCommand("pd_scan", "Pump/Dump: проверить сейчас"),
+        BotCommand("pd_check", "Pump/Dump: одна монета"),
+        BotCommand("pd_stats", "Статистика pump/dump"),
+        BotCommand("pd_backtest", "Бэктест pump/dump"),
         BotCommand("myid", "Ваш Telegram ID"),
     ])
 
 
-CARD_VERSION = "v5-RU"
+CARD_VERSION = "v6.1-RU"
 
 
 def main():
@@ -450,6 +465,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_text))
 
     amd_swing.register(app)  # 1h (trend 4h) va 4h (trend 1d) AMD moduli
+    pump_detector.register(app)  # pump/dump detektori (AMD'dan alohida)
 
     # Скан выравнивается по часам: :00, :05, :10 ... (+15 с после закрытия свечи).
     # Bir xil yopilgan sham qayta tahlil qilinmaydi (amd.scan ichida).

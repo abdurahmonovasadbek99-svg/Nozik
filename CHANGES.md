@@ -1,3 +1,36 @@
+# v6 → v6.1: aniqroq signal + yengil grafik
+
+1. **Qat'iy rejim** (`PUMP_STRICT=1`): davom etayotgan harakat (≥3/4 sham), OI ≥2% tushsa rad, 6 soatlik diapazon
+   sinishi (5m) majburiy; sinish ballga +10. Standart `PUMP_MIN_SCORE` 60 → 70.
+2. **`/pd_backtest`**: jonli bilan bir xil `evaluate()` ni ~5 kunlik 1m tarixda sinaydi (xarajatlar R da).
+   Chegaralarni taxmin bilan emas, natija bilan sozlang.
+3. **Grafik** (`engine/pump_chart.py`): alohida yengil renderer. Figure+Agg, 720x600, dpi 100, vlines+bar;
+   sandboxda ~0.3 s, ~37 KB, birinchi ~40 grafikdan keyin xotira ~+29 MB'da to'xtaydi (oqish yo'q);
+   xabar yuborilgach `gc.collect()`. Xato bo'lsa matn grafiksiz ketadi.
+4. Python 3.11 moslik: f-string ichida backslash yo'q (Render 3.11.9).
+
+Test qilinmagan: haqiqiy Bybit/Telegram, Render'dagi real xotira. Sinov sintetik ma'lumotda.
+
+# v5 → v6: Pump/Dump detektori
+
+Muammo: AMD faqat "akkumulyatsiya → sweep → qaytish" naqshini ko'radi, shuning uchun to'g'ri
+yo'nalishda uchib ketgan pump/dump coinlar signal bermasdi.
+
+1. **Yangi `signals/pump_detector.py`** (AMD'ga tegilmagan): tickers snapshotlari orqali narx harakati
+   (5m/15m), keyin 1m shamlarda hajm sakrashi, impuls tozaligi, qaytish, kech qolganlik, OI va BTC rejimi.
+2. **Aylanma chegarasi 1M USDT** (AMD'da 3M): kichik coinlar pump boshlanishidan oldin ham ko'rinadi.
+3. **Bazaviy hajm "trimmed" o'rtacha**: oldingi spike shamlari baza hajmini shishirib, yangi sakrashni
+   yashirmaydi.
+4. **Alohida statistika**: `tf="pump"`; `/report` da AMD umumiy natijasiga kirmaydi (`get_stats_since(exclude_tf=...)`).
+5. **Spamdan himoya**: cooldown (coin+yo'nalish), skanda max 4 ta, soatiga max 15 ta (bozor qulaganda).
+6. Yangi buyruqlar: `/pd_scan`, `/pd_check`, `/pd_stats`; `/settings` da detektor sozlamalari.
+
+## Test qilingan (tarmoqsiz, sintetik)
+Sof/tahlil funksiyasi: toza pump, dump, shovqin, past hajm, qaytish, ortiqcha cho'zilgan, noliquid, BTC jarima;
+mock tickers bilan to'liq skan (warm-up, nomzod tanlash, cooldown), DB yozish, evaluator (TP2), Telegram yuborish,
+`bot.py` importi. Haqiqiy Bybit/Telegram bilan ISHLAB KO'RILMAGAN — birinchi kunlarda `/pd_check` va logni kuzating.
+Bybit tickers'dagi `openInterestValue` maydoni bo'lmasa OI ballsiz ishlaydi (xatosiz).
+
 # v3 → v4: nima tuzatildi
 
 ## Strategiya / hisob-kitob xatolari
