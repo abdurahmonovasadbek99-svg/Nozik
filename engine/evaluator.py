@@ -178,9 +178,17 @@ def get_stats(tf: str) -> dict:
     return out
 
 
-def get_stats_since(seconds_ago: int, tf: Optional[str] = None) -> dict:
+def get_stats_since(seconds_ago: int, tf: Optional[str] = None,
+                    exclude_tf: Optional[str] = None) -> dict:
+    """tf — faqat shu taymfreym; exclude_tf — shu taymfreymni hisobdan chiqarish
+    (AMD statistikasi pump/dump detektori bilan aralashmasligi uchun)."""
     cutoff = int(time.time()) - seconds_ago
-    tf_sql, tf_args = ("AND tf=?", (tf,)) if tf else ("", ())
+    if tf:
+        tf_sql, tf_args = "AND tf=?", (tf,)
+    elif exclude_tf:
+        tf_sql, tf_args = "AND tf<>?", (exclude_tf,)
+    else:
+        tf_sql, tf_args = "", ()
     with db.tx() as conn:
         total_sent = conn.execute(
             f"SELECT COUNT(*) FROM signals WHERE sent_ts >= ? {tf_sql}", (cutoff, *tf_args)
