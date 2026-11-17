@@ -1,7 +1,7 @@
 """
 Signal kartasi (rasm) generatsiyasi — "Fxabot" dizayni uslubida:
   sarlavha + yo'nalish tugmasi, AMD belgilari (A · M · D), SL/Entry/TP zonalari,
-  ko'rsatkichlar paneli, signal sifati (baho + progress) va konfluens chiplari.
+  панель показателей, качество сигнала (оценка + прогресс) и чипы конфлюэнса.
 
 Thread-safe: pyplot emas, Figure ob'ekti ishlatiladi (asyncio.to_thread ichida xavfsiz).
 Rasmda emoji ishlatilmaydi (matplotlib shriftida yo'q) — faqat DejaVu belgilar (▲ ▼ ✓ ✗ → •).
@@ -53,7 +53,7 @@ T = {
 
 # ---------------------------------------------------------------- yordamchilar
 def grade_of(score: int):
-    """(harf, rang) — signal sifati bahosi."""
+    """(буква, цвет) — оценка качества сигнала."""
     if score >= 85:
         return "A+", GREEN
     if score >= 75:
@@ -298,7 +298,7 @@ def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral"
             ov.text(cx, by0 + 44, val, color=col, fontsize=12.5, fontweight="bold", ha="center", va="center", zorder=3)
             ov.text(cx, by0 + 67, sub_t, color=MUTED, fontsize=6.3, ha="center", va="center", zorder=3)
 
-        # --- signal sifati paneli
+        # --- панель качества сигнала
         score = int(meta.get("score", 0))
         g, gcol = grade_of(score)
         qy0, qh = 714, 112

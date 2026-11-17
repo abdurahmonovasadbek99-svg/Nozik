@@ -8,7 +8,7 @@ Qoidalar:
   - TP1 urilsa: 50% yopiladi, SL breakeven'ga suriladi
       - TP2 urilsa                    -> 0.5*RR1 + 0.5*RR2
       - kirish narxiga qaytsa         -> 0.5*RR1
-  - Muddat tugasa: qolgan pozitsiya oxirgi sham yopilish narxida yopiladi
+  - По истечении срока: остаток позиции закрывается по цене закрытия последней свечи
     (avval 0R deb olinardi — bu natijani chiroyli ko'rsatardi)
   - Bir sham ichida SL ham, TP ham urilsa — SL hisoblanadi (konservativ).
   - Komissiya + slippage R hisobida ayriladi (cost_r).
@@ -63,7 +63,7 @@ def step(side: str, entry: float, sl: float, tp1: float, tp2: float,
 
 def expire_gross(side: str, entry: float, sl: float, rr1: float,
                  hit1: bool, last_close: float) -> float:
-    """Muddat tugaganda qolgan pozitsiya oxirgi yopilish narxida yopiladi."""
+    """По истечении срока остаток позиции закрывается по последней цене закрытия."""
     risk = abs(entry - sl)
     if risk <= 0:
         return 0.0
