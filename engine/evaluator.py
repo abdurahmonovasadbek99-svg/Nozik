@@ -72,15 +72,18 @@ def _init():
 
 
 # ------------------------------------------------------------------ yozish
-def record_signal(sig):
-    """sig: signals.amd_volume.Signal (sig.tf = '15m' | '1h' | '4h' | '1d')"""
+def record_signal(sig) -> int:
+    """sig: signals.amd_volume.Signal (sig.tf = '15m' | '1h' | '4h' | '1d').
+    Qaytaradi: sent_ts (soniya) — Mini App havolasi (symbol + sent_ts) shu bilan signalni topadi."""
+    sent_ts = int(time.time())
     with db.tx() as conn:
         conn.execute(
             "INSERT INTO signals (symbol, tf, side, score, entry, sl, tp1, tp2, rr1, rr2, "
             "sent_ts, checked_ts, tp3) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (sig.symbol, sig.tf, sig.side, sig.score, sig.entry, sig.sl, sig.tp1, sig.tp2,
-             sig.rr1, sig.rr2, int(time.time()), sig.ts, getattr(sig, "tp3", None)),
+             sig.rr1, sig.rr2, sent_ts, sig.ts, getattr(sig, "tp3", None)),
         )
+    return sent_ts
 
 
 def recently_signaled(symbol: str, tf: str, cooldown_sec: int) -> bool:

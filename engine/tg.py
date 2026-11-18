@@ -139,21 +139,45 @@ def format_backtest(r: dict, P: dict, days: Optional[float] = None) -> str:
     return "\n".join(lines)
 
 
-async def send_with_chart(bot, chat_id, text: str, buf, parse_mode=None) -> None:
-    """Admin chat'ga rasm + matn. Matn sig'masa — alohida xabar."""
+def live_markup(symbol: str, sent_ts: Optional[int]):
+    """Rasm ostidagi "📊 Jonli grafik" tugmasi (Telegram Mini App). Sozlanmagan bo'lsa — None."""
+    import config as C
+    if not (C.USE_WEBAPP and sent_ts and symbol):
+        return None
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    url = f"{C.WEBAPP_URL}/app?s={symbol}&t={int(sent_ts)}"
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Живой график", web_app=WebAppInfo(url=url))]])
+
+
+async def send_with_chart(bot, chat_id, text: str, buf, parse_mode=None, reply_markup=None) -> None:
+    """Admin chat'ga rasm + matn. Matn sig'masa — alohida xabar. reply_markup — tugma (rasm/matn ostida).
+    Tugma xato bersa (masalan guruh chat) — xabar tugmasiz qayta yuboriladi, signal yo'qolmaydi."""
+    try:
+        await _send(bot, chat_id, text, buf, parse_mode, reply_markup)
+    except Exception as e:
+        if reply_markup is None:
+            raise
+        logger.warning(f"Tugma bilan yuborib bo'lmadi ({chat_id}): {e} — tugmasiz qayta urinaman")
+        await _send(bot, chat_id, text, buf, parse_mode, None)
+
+
+async def _send(bot, chat_id, text: str, buf, parse_mode, reply_markup) -> None:
     if buf is not None:
         buf.seek(0)
         if len(text) <= CAPTION_LIMIT:
-            await bot.send_photo(chat_id=chat_id, photo=buf, caption=text, parse_mode=parse_mode)
+            await bot.send_photo(chat_id=chat_id, photo=buf, caption=text, parse_mode=parse_mode,
+                                 reply_markup=reply_markup)
             return
         await bot.send_photo(chat_id=chat_id, photo=buf)
-    await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode)
+    await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode,
+                           reply_markup=reply_markup)
 
 
-async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None, parse_mode=None) -> None:
+async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None, parse_mode=None,
+                    reply_markup=None) -> None:
     for chat_id in chat_ids:
         try:
-            await send_with_chart(bot, chat_id, text, buf, parse_mode)
+            await send_with_chart(bot, chat_id, text, buf, parse_mode, reply_markup)
         except Exception as e:
             logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
 
