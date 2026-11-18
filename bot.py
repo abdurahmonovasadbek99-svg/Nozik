@@ -65,7 +65,8 @@ def _all_tfs() -> list:
 async def _send_signal(bot, s):
     buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                               tg.levels_of(s), s.tf, tg.meta_of(s, CFG))
-    await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf, parse_mode="HTML")
+    await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf, parse_mode="HTML",
+                       reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)))
 
 
 async def _run_scan(bot, force: bool = False):
@@ -87,7 +88,7 @@ async def _run_scan(bot, force: bool = False):
                 logger.info(f"{s.symbol}: signal ({s.side}) BTC rejimiga ({regime}) zid - o'tkazib yuborildi")
                 skipped += 1
                 continue
-            await asyncio.to_thread(record_signal, s)   # cooldown faqat YUBORILGAN signaldan boshlanadi
+            s.sent_ts = await asyncio.to_thread(record_signal, s)   # cooldown faqat YUBORILGAN signaldan boshlanadi
             await _send_signal(bot, s)
             sent += 1
         return sent, skipped, len(sigs)
@@ -406,8 +407,9 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def run_health_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    server.serve_forever()
+    """Health-check + Telegram Mini App (jonli grafik) — BIR portda (webapp/server.py)."""
+    from webapp.server import run_server
+    run_server(PORT)
 
 
 async def _post_init(app: Application):

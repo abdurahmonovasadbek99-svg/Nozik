@@ -1,3 +1,16 @@
+# v6.3: Telegram Mini App — jonli grafik (signal rasmi ostida tugma)
+
+- Har signal (pump va AMD) rasmi ostida "📊 Живой график" tugmasi chiqadi (Telegram Mini App, WebApp).
+- Sahifa: 1m shamlar har 3 soniyada yangilanadi; SL / Вход / TP1 / TP2 / TP3 chiziqlari, signal vaqti, joriy narx,
+  jonli R va %, holat ("TP1 взят · SL → вход" va h.k. — sim.py bilan bir xil qoidalar), 1м/5м/15м/1ч tugmalari, "Все цели".
+  Grafik ustida barmoqni yuqori/pastga surish — shamlar sonini o'zgartiradi.
+- Bybit ma'lumoti SERVER orqali olinadi (Render) — telefonda Bybit bloklangan bo'lsa ham ishlaydi.
+- Xavfsizlik: /api/* faqat Telegram initData (HMAC) to'g'ri va foydalanuvchi ADMIN_CHAT_IDS ichida bo'lsa ishlaydi.
+- Yangi modul: webapp/ (server.py, page.html). bot.py dagi health-server shu serverga almashtirildi (bir port, ko'p oqimli).
+- Sozlash: Render'da RENDER_EXTERNAL_URL avtomatik (HTTPS). Boshqa joyda `WEBAPP_URL=https://...`. O'chirish: `USE_WEBAPP=0`.
+  Faqat sinash uchun `WEBAPP_OPEN=1` (tekshiruvsiz API) — ishlatgandan keyin o'chiring.
+- Tugma ishlamasa (masalan guruh chat) — xabar tugmasiz yuboriladi, signal yo'qolmaydi.
+
 # v6.2 (davomi): TP3 kuchli impulsda + jonli bosqich xabarlari
 
 1. **TP3 faqat kuchli impulsda** (`PUMP_TP3_ENABLED=1`): ball >= `PUMP_TP3_MIN_SCORE`(80), hajm >= x`PUMP_TP3_VOL_X`(5),

@@ -126,3 +126,8 @@ PORT = _i("PORT", "10000")
 # --- O'z-o'ziga ping ---
 SELF_PING_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 SELF_PING_INTERVAL_SECONDS = _i("SELF_PING_INTERVAL_SECONDS", "240")
+
+# --- Telegram Mini App (jonli grafik tugmasi signal rasmi ostida) ---
+# Manzil HTTPS bo'lishi shart. Render'da RENDER_EXTERNAL_URL avtomatik; boshqa joyda WEBAPP_URL bering.
+WEBAPP_URL = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
+USE_WEBAPP = os.environ.get("USE_WEBAPP", "1") == "1" and WEBAPP_URL.startswith("https://")
