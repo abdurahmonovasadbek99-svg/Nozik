@@ -74,6 +74,10 @@ class Alert:
     turn24: float = 0.0
     btc_conflict: bool = False
     breakout: Optional[bool] = None
+    tp3: Optional[float] = None          # faqat kuchli impulsda
+    rr3: Optional[float] = None
+    trend: Optional[str] = None          # 1h trend: "up" | "down" | "flat" | None (ma'lumot yo'q)
+    line_broken: Optional[bool] = None   # 1h trend chizig'i buzilganmi (None — chiziq yo'q/ma'lumot yo'q)
     reasons: List[str] = field(default_factory=list)
     candles: list = field(default_factory=list)      # grafik uchun oxirgi 1m shamlar (DB ga yozilmaydi)
     tf: str = TF
@@ -177,9 +181,66 @@ def _is_breakout(c5: list, price: float, up: bool) -> Optional[bool]:
     return price > max(x[2] for x in prior) if up else price < min(x[3] for x in prior)
 
 
+def _ema(vals: list, n: int) -> float:
+    k = 2.0 / (n + 1)
+    e = vals[0]
+    for v in vals[1:]:
+        e = v * k + e * (1 - k)
+    return e
+
+
+def _swings(c: list, high: bool, k: int = 2) -> List[Tuple[int, float]]:
+    """Tasdiqlangan swing nuqtalar (k ta sham chap/o'ngda). [(index, narx)]"""
+    out = []
+    for i in range(k, len(c) - k):
+        v = c[i][2] if high else c[i][3]
+        ok = True
+        for j in range(i - k, i + k + 1):
+            if j == i:
+                continue
+            if j < i:      # chapda qat'iy katta/kichik bo'lsa — swing emas; o'ngda teng bo'lsa ham emas (dublikat oldini olish)
+                bad = (c[j][2] > v) if high else (c[j][3] < v)
+            else:
+                bad = (c[j][2] >= v) if high else (c[j][3] <= v)
+            if bad:
+                ok = False
+                break
+        if ok:
+            out.append((i, v))
+    return out
+
+
+def trend_ctx(c1h: Optional[list], price: float, up: bool) -> Optional[dict]:
+    """1h kontekst: EMA20/EMA50 yo'nalishi va trend chizig'i (oxirgi 2 ta swing).
+    LONG uchun — pasayuvchi qarshilik chizig'i (lower highs); SHORT uchun — o'suvchi qo'llab-quvvatlash
+    chizig'i (higher lows). `c1h` — faqat YOPILGAN 1h shamlar (eskidan yangiga).
+    Ma'lumot yetarli bo'lmasa None."""
+    if not c1h or len(c1h) < 55:
+        return None
+    c = c1h[-120:]
+    closes = [x[4] for x in c]
+    e20, e50 = _ema(closes, 20), _ema(closes, 50)
+    gap = (e20 / e50 - 1) * 100 if e50 > 0 else 0.0
+    trend = "up" if gap > 0.3 else "down" if gap < -0.3 else "flat"
+    against = (trend == "down" and up) or (trend == "up" and not up)
+
+    line, broken = None, None
+    sw = _swings(c, high=up)
+    prev = [q for q in sw[:-1] if sw and q[0] <= sw[-1][0] - 3]
+    if sw and prev:
+        (i1, v1), (i2, v2) = prev[-1], sw[-1]
+        descending_ok = (v2 < v1) if up else (v2 > v1)     # lower highs / higher lows
+        if descending_ok:
+            n_now = len(c)                                   # hozirgi (shakllanayotgan) shamning indeksi
+            line = v2 + (v2 - v1) / (i2 - i1) * (n_now - i2)
+            buf = 0.003                                      # 0.3% bufer
+            broken = price > line * (1 + buf) if up else price < line * (1 - buf)
+    return {"trend": trend, "gap": gap, "against": against, "line": line, "broken": broken}
+
+
 def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str = "neutral",
              turn24: float = 0.0, now_ms: Optional[int] = None,
-             c5: Optional[list] = None) -> dict:
+             c5: Optional[list] = None, c1h: Optional[list] = None) -> dict:
     """1m shamlar (eskidan yangiga, oxirgisi — shakllanayotgan) bo'yicha tekshiradi.
     Qaytaradi: {"alert": Alert|None, "reject": sabab|None, "m": ko'rsatkichlar}.
     Sof funksiya (tarmoqsiz) — test va /pd_check uchun ham ishlatiladi."""
@@ -242,8 +303,30 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
     if retr > MAX_RETRACE:
         return {"alert": None, "reject": f"откат {retr * 100:.0f}% импульса — уже разворачивается", "m": m}
 
-    # --- daraja (taxminiy): SL = impulsning yarmi, TP1 = 1R, TP2 = 2R
-    risk = IMPULSE_SL_FRAC * imp
+    # --- vertikal "blow-off" cho'qqiga kirmaslik: impuls zinapoya (kamida bir oz orqaga qaytish) bo'lishi kerak.
+    # Yo'l bo'yicha eng chuqur orqaga qaytish (running extreme'dan) impulsning PUMP_MIN_PULLBACK ulushidan kam bo'lsa —
+    # bu bitta vertikal chiziq: odatda darhol 40-60% qaytadi va SL uriladi.
+    if up:
+        run, dd = last15[i_lo][2], 0.0
+        for x in last15[i_lo + 1:]:
+            dd = max(dd, run - x[3])
+            run = max(run, x[2])
+    else:
+        run, dd = last15[i_hi][3], 0.0
+        for x in last15[i_hi + 1:]:
+            dd = max(dd, x[2] - run)
+            run = min(run, x[3])
+    pb = dd / imp
+    m["pullback"] = pb
+    if C.PUMP_STRICT and C.PUMP_MIN_PULLBACK > 0 and pb < C.PUMP_MIN_PULLBACK:
+        return {"alert": None, "reject": f"вертикальный всплеск без отката ({pb * 100:.0f}% < "
+                                         f"{C.PUMP_MIN_PULLBACK * 100:.0f}%) — вход на пике", "m": m}
+
+    # --- daraja: SL = impulsning yarmi + ATR bufer (stop-hunt shovqini), TP1 = 1R, TP2 = 2R
+    atr = sum(max(x[2] - x[3], abs(x[2] - c[k - 1][4]), abs(x[3] - c[k - 1][4]))
+              for k, x in enumerate(c[-14:], start=len(c) - 14)) / 14
+    struct = abs(price - (min(x[3] for x in c[-10:]) if up else max(x[2] for x in c[-10:])))
+    risk = max(IMPULSE_SL_FRAC * imp, struct) + C.PUMP_SL_ATR * atr
     risk_pct = risk / price * 100
     m["risk_pct"] = risk_pct
     if risk_pct > C.PUMP_MAX_RISK_PCT:
@@ -252,6 +335,11 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         return {"alert": None, "reject": f"риск {risk_pct:.2f}% слишком мал", "m": m}
     sgn = 1 if up else -1
     sl, tp1, tp2 = price - sgn * risk, price + sgn * risk, price + sgn * 2 * risk
+    cost_r = sim.cost_r(price, sl, C.FEE_PCT, C.SLIPPAGE_PCT)
+    m["cost_r"] = cost_r
+    if cost_r > C.PUMP_MAX_COST_R:
+        return {"alert": None, "reject": f"издержки {cost_r:.2f}R > {C.PUMP_MAX_COST_R:.2f}R — "
+                                         f"стоп слишком близко, комиссия съедает прибыль", "m": m}
 
     # --- qat'iy rejim: faqat aniq, davom etayotgan harakat
     n_dir = sum(1 for x in c[-4:] if (x[4] > x[1]) == up)
@@ -264,6 +352,16 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
             return {"alert": None, "reject": f"OI {oi_chg:+.1f}% — это закрытие позиций, а не новый спрос", "m": m}
         if breakout is False:
             return {"alert": None, "reject": f"нет пробоя диапазона за {C.PUMP_BREAKOUT_HOURS} ч (локальный всплеск)", "m": m}
+
+    # --- 1h trend / trend chizig'i: trendga qarshi pump/dump — ko'pincha "dead cat bounce" (SL shundan)
+    tc = trend_ctx(c1h, price, up) if (C.PUMP_TREND_FILTER and c1h) else None
+    if tc:
+        m.update(trend=tc["trend"], line_broken=tc["broken"])
+        line_txt = "нисходящей" if up else "восходящей"
+        if tc["line"] is not None and tc["broken"] is False:
+            return {"alert": None, "reject": f"против 1ч тренда: цена не пробила {line_txt} линию тренда", "m": m}
+        if tc["against"] and tc["line"] is None:
+            return {"alert": None, "reject": f"против 1ч тренда (EMA20/50 {tc['gap']:+.1f}%), линии тренда для пробоя нет", "m": m}
 
     # --- ball
     reasons: List[str] = []
@@ -283,9 +381,9 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
             reasons.append(f"OI {oi_chg:+.1f}% — закрытие позиций (движение слабее)")
         else:
             reasons.append(f"OI {oi_chg:+.1f}%")
-    if retr <= 0.2:
+    if 0.05 <= retr <= 0.30:
         score += 5
-        reasons.append("Цена у экстремума импульса")
+        reasons.append(f"Откат {retr * 100:.0f}% и продолжение")
     if n_dir >= 3:
         score += 5
     if breakout:
@@ -294,14 +392,35 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
     if ext > 0.6 * C.PUMP_MAX_EXT_PCT:
         score -= 10
         reasons.append(f"Уже ушла {ext:.0f}% за 30 мин")
+    if tc:
+        if not tc["against"]:
+            if tc["trend"] != "flat":
+                score += 8
+                reasons.append("По 1ч тренду")
+            if tc["broken"]:
+                score += 4
+                reasons.append("Пробой линии тренда 1ч")
+        else:
+            score -= 5
+            reasons.append("Разворот: против 1ч EMA, но линия тренда пробита")
     conflict = conflicts_with_btc_regime(symbol, side, regime)
     if conflict:
-        score -= 10
+        score -= C.PUMP_BTC_PENALTY
         reasons.append("Против тренда BTC")
     score_i = max(0, min(100, int(round(score))))
     m["score"] = score_i
     if score_i < C.PUMP_MIN_SCORE:
         return {"alert": None, "reject": f"скор {score_i} < {C.PUMP_MIN_SCORE}", "m": m}
+
+    # --- kuchli impuls -> TP3: yuqori ball + katta hajm + diapazon sinishi + trendga qarshi emas + OI o'sishi/noma'lum
+    tp3 = rr3 = None
+    strong = (C.PUMP_TP3_ENABLED and score_i >= C.PUMP_TP3_MIN_SCORE and vol_x >= C.PUMP_TP3_VOL_X
+              and breakout is True and not conflict and mr >= 1.2
+              and (oi_chg is None or oi_chg >= 0.0) and not (tc and tc["against"]))
+    if strong:
+        rr3 = float(C.PUMP_TP3_RR)
+        tp3 = price + sgn * rr3 * risk
+        reasons.append(f"Сильный импульс → добавлен TP3 ({rr3:g}R)")
 
     tfms = sim.tf_ms(EVAL_INTERVAL)
     ts = int((now_ms or time.time() * 1000) // tfms * tfms)
@@ -309,7 +428,8 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         symbol=symbol, kind=kind, side=side, score=score_i, entry=price, sl=sl, tp1=tp1, tp2=tp2,
         rr1=1.0, rr2=2.0, risk_pct=risk_pct, ts=ts, ch5=ch5, ch15=ch15, vol_x=vol_x,
         peak_x=peak_x, oi_chg=oi_chg, ext=ext, retr=retr, turn24=turn24,
-        btc_conflict=conflict, breakout=breakout, reasons=reasons,
+        btc_conflict=conflict, breakout=breakout, reasons=reasons, tp3=tp3, rr3=rr3,
+        trend=(tc["trend"] if tc else None), line_broken=(tc["broken"] if tc else None),
         candles=c[-60:])
     return {"alert": alert, "reject": None, "m": m}
 
@@ -325,6 +445,28 @@ def _recent(symbol: str, side: str, sec: int) -> bool:
     except Exception as e:
         logger.warning(f"pump cooldown tekshiruvi xatosi: {e}")
         return _MEM_SENT.get((symbol, side), 0) >= time.time() - sec
+
+
+def _recent_sl(symbol: str, side: str, sec: int) -> bool:
+    """Shu coin+yo'nalish yaqinda SL urganmi? (qayta kirmaslik uchun uzoqroq cooldown)"""
+    if sec <= 0:
+        return False
+    try:
+        with db.tx() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM signals WHERE symbol=? AND tf=? AND side=? AND status='sl' "
+                "AND closed_ts>=? LIMIT 1",
+                (symbol, TF, side, int(time.time()) - sec)).fetchone()
+        return row is not None
+    except Exception as e:
+        logger.warning(f"pump SL cooldown xatosi: {e}")
+        return False
+
+
+def _fetch_1h_closed(sym: str) -> Optional[list]:
+    c = A.bybit_klines(sym, "60", 120)
+    time.sleep(0.1)
+    return c[:-1] if c else None            # shakllanayotgan shamni tashlaymiz
 
 
 def _sent_last_hour() -> int:
@@ -381,15 +523,19 @@ def scan() -> List[Alert]:
             continue
         oi = _oi_change(sym, now)
         res = evaluate(sym, c, oi, regime, turn)
-        if res["alert"]:                      # 2-bosqich: 5m kontekst (diapazon sinishi)
+        if res["alert"]:                      # 2-bosqich: 5m kontekst (diapazon sinishi) + 1h trend
             c5 = A.bybit_klines(sym, "5", 130)
             time.sleep(0.1)
-            res = evaluate(sym, c, oi, regime, turn, c5=c5)
+            c1h = _fetch_1h_closed(sym) if C.PUMP_TREND_FILTER else None
+            res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h)
         a = res["alert"]
         if not a:
             logger.debug(f"Pump {sym}: {res['reject']}")
             continue
         if _recent(sym, a.side, C.PUMP_COOLDOWN_SECONDS):
+            continue
+        if _recent_sl(sym, a.side, C.PUMP_SL_COOLDOWN_SECONDS):
+            logger.info(f"Pump {sym}: yaqinda SL urgan, qayta kirilmaydi")
             continue
         out.append(a)
     out.sort(key=lambda x: -x.score)
@@ -413,7 +559,8 @@ def check(symbol: str) -> Optional[dict]:
     oi = _oi_change(symbol, now)
     res = evaluate(symbol, c, oi, regime)
     if res["alert"]:
-        res = evaluate(symbol, c, oi, regime, c5=A.bybit_klines(symbol, "5", 130))
+        c1h = _fetch_1h_closed(symbol) if C.PUMP_TREND_FILTER else None
+        res = evaluate(symbol, c, oi, regime, c5=A.bybit_klines(symbol, "5", 130), c1h=c1h)
     return res
 
 
@@ -432,6 +579,13 @@ def format_alert(a: Alert) -> str:
     hours = C.PUMP_EXPIRE_CANDLES * 5 / 60
     line = "━━━━━━━━━━━━━━━━"
     brk = f"🧱 Пробой диапазона {C.PUMP_BREAKOUT_HOURS} ч\n" if a.breakout else ""
+    tr = {"up": "↑ вверх", "down": "↓ вниз", "flat": "→ боковик"}.get(a.trend or "", "")
+    if tr:
+        brk += f"📐 Тренд 1ч: {tr}" + (" · линия тренда пробита" if a.line_broken else "") + "\n"
+    tp3_line = ""
+    if a.tp3:
+        tp3_line = (f"🏆 TP3: <code>{p(a.tp3)}</code> ({_pct(a, a.tp3)}) — сильный импульс\n"
+                    f"📌 Закрытие 40% / 30% / 30%: после TP1 SL → вход, после TP2 SL → TP1\n")
     return (
         f"{head} · <b>{a.symbol}</b>{strong}\n"
         f"{line}\n"
@@ -446,6 +600,7 @@ def format_alert(a: Alert) -> str:
         f"🎯 Вход ≈ <code>{p(a.entry)}</code>\n"
         f"🛑 SL: <code>{p(a.sl)}</code> ({_pct(a, a.sl)})\n"
         f"✅ TP1: <code>{p(a.tp1)}</code> ({_pct(a, a.tp1)}) · TP2: <code>{p(a.tp2)}</code> ({_pct(a, a.tp2)})\n"
+        f"{tp3_line}"
         f"⏱ Срок: ~{hours:.0f} ч\n"
         f"{line}\n"
         f"⚠️ Это детектор импульса, не AMD-сигнал. Вход по движению — повышенный риск; "
@@ -467,6 +622,12 @@ def format_check(symbol: str, res: dict) -> str:
         lines.append(f"Откат от экстремума: {m['retr'] * 100:.0f}% (макс. {MAX_RETRACE * 100:.0f}%)")
     if m.get("breakout") is not None:
         lines.append("Пробой диапазона: " + ("да ✅" if m["breakout"] else "нет ❌"))
+    if "pullback" in m:
+        lines.append(f"Откат внутри импульса: {m['pullback'] * 100:.0f}% (нужно от {C.PUMP_MIN_PULLBACK * 100:.0f}%)")
+    if "cost_r" in m:
+        lines.append(f"Риск {m['risk_pct']:.1f}% · издержки {m['cost_r']:.2f}R (макс. {C.PUMP_MAX_COST_R:.2f}R)")
+    if m.get("trend"):
+        lines.append(f"Тренд 1ч: {m['trend']}" + (", линия пробита ✅" if m.get("line_broken") else ""))
     if "score" in m:
         lines.append(f"Скор: {m['score']}/100 (порог {C.PUMP_MIN_SCORE})")
     lines.append("")
@@ -504,18 +665,23 @@ def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
     if len(c1) < 400:
         return None
     b5 = _aggregate_5m(c1)
+    h1: list = []
+    if C.PUMP_TREND_FILTER:                    # 1h tarix: signal paytida faqat YOPILGAN 1h shamlar (kelajakka qarash yo'q)
+        h1 = A.bybit_klines_history(symbol, "60", len(c1) // 60 + 130)
     exp = C.PUMP_EXPIRE_CANDLES * 5            # 1m shamlarda
     cool = max(1, C.PUMP_COOLDOWN_SECONDS // 60)
     trades: List[dict] = []
-    k, i = 0, 59
+    k, i, kh = 0, 59, 0
     while i < len(c1) - 1:
         w = c1[i - 59:i + 1]
         res = evaluate(symbol, w, None, "neutral", 0.0, now_ms=w[-1][0])
         if res["alert"]:
             while k < len(b5) and b5[k][0] + 300000 <= w[-1][0] + 60000:
                 k += 1
+            while kh < len(h1) and h1[kh][0] + 3600000 <= w[-1][0] + 60000:
+                kh += 1
             res = evaluate(symbol, w, None, "neutral", 0.0, now_ms=w[-1][0],
-                           c5=b5[max(0, k - 130):k])
+                           c5=b5[max(0, k - 130):k], c1h=(h1[max(0, kh - 120):kh] if h1 else None))
         a = res["alert"]
         if not a:
             i += 1
@@ -523,17 +689,22 @@ def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
         end = min(len(c1), i + 1 + exp)
         hit1, status, gross = False, None, None
         for j in range(i + 1, end):
-            hit1, status, gross = sim.step(a.side, a.entry, a.sl, a.tp1, a.tp2, 1.0, 2.0,
-                                           hit1, c1[j][2], c1[j][3])
+            if a.tp3:
+                hit1, status, gross = sim.step3(a.side, a.entry, a.sl, a.tp1, a.tp2, a.tp3, 1.0, 2.0,
+                                                a.rr3, int(hit1), c1[j][2], c1[j][3])
+            else:
+                hit1, status, gross = sim.step(a.side, a.entry, a.sl, a.tp1, a.tp2, 1.0, 2.0,
+                                               hit1, c1[j][2], c1[j][3])
             if status:
                 break
         if not status:
             if end - i - 1 < exp:              # ma'lumot tugadi — natija noma'lum
                 break
             status = "expired"
-            gross = sim.expire_gross(a.side, a.entry, a.sl, 1.0, hit1, c1[end - 1][4])
+            gross = (sim.expire_gross3(a.side, a.entry, a.sl, 1.0, 2.0, int(hit1), c1[end - 1][4]) if a.tp3
+                     else sim.expire_gross(a.side, a.entry, a.sl, 1.0, hit1, c1[end - 1][4]))
         cost = sim.cost_r(a.entry, a.sl, C.FEE_PCT, C.SLIPPAGE_PCT)
-        trades.append({"side": a.side, "score": a.score, "status": status,
+        trades.append({"side": a.side, "score": a.score, "status": status, "tp3": bool(a.tp3),
                        "gross": gross, "net": gross - cost, "cost": cost})
         i += cool                               # cooldown
     return {"symbol": symbol, "bars": len(c1), "trades": trades}
@@ -571,7 +742,7 @@ def summarize(trades: List[dict], per: list, ok: int, bars: int) -> dict:
         "cost_R": round(sum(t["cost"] for t in trades), 2),
         "avg_R": round(sum(nets) / n, 2) if n else 0,
         "pf": round(gains / losses, 2) if losses > 0 else None,
-        "by_status": by_status,
+        "by_status": by_status, "strong": sum(1 for t in trades if t.get("tp3")),
         "per_symbol": sorted(per, key=lambda x: -x[2]),
         "profitable_symbols": sum(1 for _, nn, r in per if nn and r > 0),
         "active_symbols": sum(1 for _, nn, _ in per if nn),
@@ -590,8 +761,9 @@ def format_backtest(r: dict) -> str:
         f"Итого (после издержек): {r['total_R']:+.2f}R",
         f"До издержек: {r['gross_R']:+.2f}R | издержки: -{r['cost_R']:.2f}R",
         f"Среднее: {r['avg_R']:+.2f}R | Profit factor: {pf}",
-        f"TP2: {bs.get('tp2', 0)} | TP1+BE: {bs.get('be', 0)} | SL: {bs.get('sl', 0)} | "
-        f"по сроку: {bs.get('expired', 0)}",
+        f"TP3: {bs.get('tp3', 0)} | TP2: {bs.get('tp2', 0)} | TP1+TP2: {bs.get('lock', 0)} | "
+        f"TP1+BE: {bs.get('be', 0)} | SL: {bs.get('sl', 0)} | по сроку: {bs.get('expired', 0)}",
+        f"Сильных (с TP3): {r.get('strong', 0)}",
     ]
     if r["active_symbols"]:
         lines.append(f"Токенов в плюсе: {r['profitable_symbols']}/{r['active_symbols']}")
@@ -660,13 +832,28 @@ async def _job_scan(context):
         logger.error(f"Pump skanerlashda xato: {e}")
 
 
+def _progress_text(ev: dict) -> str:
+    sym, side, st, three = ev["symbol"], ev["side"], ev["stage"], ev["three"]
+    if st == 1:
+        part = "40%" if three else "50%"
+        return (f"🎯 TP1 взят [pump]\n{sym} {side}: закройте ~{part}, SL перенесите на вход "
+                f"({ev['entry']:.6g})")
+    if not three:
+        return f"🎯🎯 TP2 взят [pump]\n{sym} {side}: позиция закрыта полностью."
+    return (f"🎯🎯 TP2 взят [pump]\n{sym} {side}: закройте ещё ~30%, SL перенесите на TP1 "
+            f"({ev['tp1']:.6g}), остаток — к TP3 ({ev['tp3']:.6g})")
+
+
 async def _job_eval(context):
+    events: list = []
     try:
         closed = await asyncio.to_thread(
-            evaluate_pending, A.bybit_klines, TF, EVAL_INTERVAL, C.PUMP_EXPIRE_CANDLES)
+            evaluate_pending, A.bybit_klines, TF, EVAL_INTERVAL, C.PUMP_EXPIRE_CANDLES, events)
     except Exception as e:
         logger.error(f"Pump baholashda xato: {e}")
         return
+    for ev in events:                 # oraliq bosqichlar: pozitsiyani qo'lda boshqarish uchun ko'rsatma
+        await tg.broadcast(context.bot, ADMIN_CHAT_IDS, _progress_text(ev))
     for r in closed:
         text = (f"{tg.RESULT_TEXT.get(r['status'], r['status'])} [pump]\n"
                 f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R")
@@ -724,8 +911,8 @@ async def cmd_pd_stats(update, context):
         f"Итого: {st['total_r']:+.2f}R (до издержек {st['gross_total_r']:+.2f}R)\n"
         f"Среднее: {st['avg_r']:+.2f}R | Profit factor: {pf}\n"
         f"Открытых: {st['pending']}\n\n"
-        f"TP2: {bs.get('tp2', 0)} | TP1+BE: {bs.get('be', 0)} | "
-        f"SL: {bs.get('sl', 0)} | Истёк срок: {bs.get('expired', 0)}"
+        f"TP3: {bs.get('tp3', 0)} | TP2: {bs.get('tp2', 0)} | TP1+TP2: {bs.get('lock', 0)} | "
+        f"TP1+BE: {bs.get('be', 0)} | SL: {bs.get('sl', 0)} | Истёк срок: {bs.get('expired', 0)}"
     )
     if st["total_closed"] < 30:
         text += "\n\n⚠️ Меньше 30 сделок — выводы делать рано."
@@ -766,6 +953,8 @@ def settings_text() -> str:
         f"Объём: от x{C.PUMP_VOL_X:g} | мин. скор {C.PUMP_MIN_SCORE} | "
         f"строгий режим: {'да' if C.PUMP_STRICT else 'нет'} | график: {'да' if C.PUMP_SEND_CHART else 'нет'}\n"
         f"Оборот 24ч: {C.PUMP_MIN_TURNOVER_USDT / 1e6:g}M — {C.PUMP_MAX_TURNOVER_USDT / 1e6:g}M USDT\n"
+        f"Фильтры v6.2: тренд 1ч {'да' if C.PUMP_TREND_FILTER else 'нет'} | мин. откат {C.PUMP_MIN_PULLBACK * 100:.0f}% | "
+        f"SL +{C.PUMP_SL_ATR:g}×ATR | макс. издержки {C.PUMP_MAX_COST_R:.2f}R | SL-cooldown {C.PUMP_SL_COOLDOWN_SECONDS // 60} мин\n"
         f"Скан: каждые {C.PUMP_SCAN_INTERVAL_SECONDS} с | cooldown {C.PUMP_COOLDOWN_SECONDS // 60} мин | "
         f"макс. {C.PUMP_MAX_ALERTS_PER_HOUR}/час\n"
     )
