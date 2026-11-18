@@ -1,3 +1,38 @@
+# v6.2 (davomi): TP3 kuchli impulsda + jonli bosqich xabarlari
+
+1. **TP3 faqat kuchli impulsda** (`PUMP_TP3_ENABLED=1`): ball >= `PUMP_TP3_MIN_SCORE`(80), hajm >= x`PUMP_TP3_VOL_X`(5),
+   6 soatlik diapazon sindi, BTC va 1h trendga qarshi emas, OI tushmayapti, harakat >= 1.2x chegara.
+   TP3 = kirishdan `PUMP_TP3_RR`(3) R. Pozitsiya 40/30/30: TP1 da SL -> kirish, TP2 da SL -> TP1, TP3 da qolgan 30%.
+   Oddiy signallar eski qoida bo'yicha (TP1 50% + BE, TP2).
+2. Yangi natija statuslari: `tp3`, `lock` (TP1+TP2 olingan, qoldiq TP1 da yopildi). `/pd_stats`, `/pd_backtest`, matn va grafik yangilandi.
+3. **Jonli bosqich xabarlari**: TP1/TP2 olinganda bot "qancha yoping, SL ni qayerga suring" xabarini yuboradi (5 daqiqalik sham yopilgandan keyin).
+4. DB: `signals.tp3` ustuni avtomatik qo'shiladi (eski baza buzilmaydi). `tp1_hit` ustuni endi bosqich (0..3) saqlaydi.
+5. Sim: `sim.step3`, `sim.expire_gross3` (backtest va jonli statistika bir xil qoida).
+
+Test: sintetik (migratsiya, evaluator, step3, TP3 chiqishi, grafik, backtest yo'li). Haqiqiy bozorda TP3 ga yetish ulushi noma'lum.
+
+# v6.1 → v6.2: pump/dump — SL urilishini kamaytirish (sifat filtrlari)
+
+Sabab (20 ta savdo: SL 8, TP1+BE 8, TP2 3, muddat 1; xarajatgacha +0.57R, keyin -0.97R):
+- kirish impuls cho'qqisida (vertikal "blow-off"), keyin odatiy 40-60% qaytish SL ni uradi;
+- 1h trend / trend chizig'i tekshirilmasdi (faqat 6 soatlik diapazon + BTC uchun -10 ball);
+- kichik riskli signallarda komissiya+slippage ~0.08R/savdo (20 savdoda -1.54R) foydani yeb qo'ydi.
+
+1. **1h trend filtri** (`PUMP_TREND_FILTER=1`): EMA20/EMA50 + oxirgi 2 swing bo'yicha trend chizig'i
+   (LONG: pasayuvchi qarshilik, SHORT: o'suvchi qo'llab-quvvatlash). Chiziq buzilmagan yoki chiziq yo'q va EMA trendga qarshi — rad.
+   Trend bo'yicha +8, chiziq buzilgan +4; EMA'ga qarshi, lekin chiziq buzilgan — -5 (burilish urinishi).
+2. **Vertikal cho'qqiga kirmaslik** (`PUMP_MIN_PULLBACK=0.10`): impuls yo'lida kamida 10% orqaga qaytish bo'lmasa rad.
+   Eski "narx ekstremumda +5 ball" olib tashlandi; endi 5-30% qaytish va davom etish +5.
+3. **SL kengaytirildi**: max(impuls/2, oxirgi 10 sham strukturasi) + `PUMP_SL_ATR`(0.5) × 1m ATR (stop-hunt shovqini).
+4. **Xarajat darvozasi** (`PUMP_MAX_COST_R=0.12`): komissiya+slippage shu R dan oshsa signal yo'q (risk >= ~2.1%).
+5. **SL-cooldown** (`PUMP_SL_COOLDOWN_SECONDS=7200`): SL urgan coin+yo'nalishga 2 soat qayta kirilmaydi.
+6. BTC rejimiga qarshi jarima 10 -> 15 (`PUMP_BTC_PENALTY`). Limitlar: skanda 4 -> 2, soatiga 15 -> 8.
+7. `/pd_check`, `/settings`, signal matni va `/pd_backtest` (1h tarix vaqt bo'yicha to'g'ri joylashtiriladi) yangilandi.
+
+Test: faqat sintetik (trendga qarshi/mos, vertikal/zinapoya, LONG/SHORT, backtest yo'li). Haqiqiy Bybit ma'lumotida
+SAMARASI ISBOTLANMAGAN — avval `/pd_backtest`, so'ng jonli statistikani kuzating. Eski xatti-harakat: Render env'da
+`PUMP_TREND_FILTER=0 PUMP_MIN_PULLBACK=0 PUMP_SL_ATR=0 PUMP_MAX_COST_R=9 PUMP_SL_COOLDOWN_SECONDS=0`.
+
 # v6 → v6.1: aniqroq signal + yengil grafik
 
 1. **Qat'iy rejim** (`PUMP_STRICT=1`): davom etayotgan harakat (≥3/4 sham), OI ≥2% tushsa rad, 6 soatlik diapazon

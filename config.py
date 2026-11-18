@@ -71,12 +71,24 @@ PUMP_MAX_RISK_PCT = _f("PUMP_MAX_RISK_PCT", "5")      # taxminiy SL masofasi shu
 PUMP_MIN_SCORE = _i("PUMP_MIN_SCORE", "70")
 PUMP_COOLDOWN_SECONDS = _i("PUMP_COOLDOWN_SECONDS", "1800")   # bir coin, bir yo'nalish
 PUMP_MIN_WINDOW_TURNOVER_USDT = _f("PUMP_MIN_WINDOW_TURNOVER_USDT", "30000")  # oxirgi 5 daq. oborot (noto'g'ri tezlik filtri)
-PUMP_MAX_ALERTS_PER_SCAN = _i("PUMP_MAX_ALERTS_PER_SCAN", "4")
-PUMP_MAX_ALERTS_PER_HOUR = _i("PUMP_MAX_ALERTS_PER_HOUR", "15")  # bozor qulaganda spamdan himoya
+PUMP_MAX_ALERTS_PER_SCAN = _i("PUMP_MAX_ALERTS_PER_SCAN", "2")
+PUMP_MAX_ALERTS_PER_HOUR = _i("PUMP_MAX_ALERTS_PER_HOUR", "8")   # bozor qulaganda spamdan himoya
 PUMP_MAX_CANDIDATES = _i("PUMP_MAX_CANDIDATES", "25")          # bir skanda 1m shamlari tekshiriladigan max coin
 PUMP_EXPIRE_CANDLES = _i("PUMP_EXPIRE_CANDLES", "24")          # 5m shamlar: 24 = 2 soat
 PUMP_STRICT = os.environ.get("PUMP_STRICT", "1") == "1"       # qat'iy rejim: faqat aniq harakat (tavsiya)
 PUMP_BREAKOUT_HOURS = _i("PUMP_BREAKOUT_HOURS", "6")          # shuncha soatlik diapazon chegarasi buzilishi kerak
+# --- v6.2: sifat filtrlari (SL urilish ulushini kamaytirish) ---
+PUMP_TREND_FILTER = os.environ.get("PUMP_TREND_FILTER", "1") == "1"   # 1h EMA + trend chizig'iga qarshi signal yo'q
+PUMP_MIN_PULLBACK = _f("PUMP_MIN_PULLBACK", "0.10")   # impulsda kamida shuncha ulush orqaga qaytish bo'lishi kerak (0 = o'chiq). Vertikal "blow-off" cho'qqiga kirmaslik
+PUMP_SL_ATR = _f("PUMP_SL_ATR", "0.5")                # SL ni 1m ATR ning shuncha ulushiga kengaytirish (stop-hunt shovqini)
+PUMP_MAX_COST_R = _f("PUMP_MAX_COST_R", "0.12")       # komissiya+slippage shu R dan oshsa signal yo'q (risk juda kichik)
+PUMP_BTC_PENALTY = _i("PUMP_BTC_PENALTY", "15")       # BTC rejimiga qarshi signal ballidan ayriladigan
+PUMP_SL_COOLDOWN_SECONDS = _i("PUMP_SL_COOLDOWN_SECONDS", "7200")  # SL urgan coin+yo'nalishga qayta kirmaslik
+# --- TP3: faqat KUCHLI impulsda (3 ta TP: 40/30/30, TP1 da SL->BE, TP2 da SL->TP1) ---
+PUMP_TP3_ENABLED = os.environ.get("PUMP_TP3_ENABLED", "1") == "1"
+PUMP_TP3_RR = _f("PUMP_TP3_RR", "3")                  # TP3 = kirishdan shuncha R
+PUMP_TP3_MIN_SCORE = _i("PUMP_TP3_MIN_SCORE", "80")   # kuchli impuls: ball
+PUMP_TP3_VOL_X = _f("PUMP_TP3_VOL_X", "5")            # kuchli impuls: hajm oddiydan kamida shuncha marta
 PUMP_SEND_CHART = os.environ.get("PUMP_SEND_CHART", "1") == "1"  # xabarga grafik biriktirish
 PUMP_BACKTEST_BARS = _i("PUMP_BACKTEST_BARS", "7200")         # 1m shamlar: 7200 = 5 kun
 
