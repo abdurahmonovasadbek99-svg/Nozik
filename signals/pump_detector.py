@@ -800,7 +800,7 @@ async def _run(bot) -> int:
         sent = 0
         for a in alerts:
             try:
-                await asyncio.to_thread(record_signal, a)
+                a.sent_ts = await asyncio.to_thread(record_signal, a)
             except Exception as e:
                 logger.error(f"Pump signalni yozishda xato ({a.symbol}): {e}")
             mark_sent(a)
@@ -812,7 +812,8 @@ async def _run(bot) -> int:
                 except Exception as e:
                     logger.warning(f"Pump grafigi chizilmadi ({a.symbol}): {e}")
             a.candles = []                    # xotirani bo'shatish
-            await tg.broadcast(bot, ADMIN_CHAT_IDS, format_alert(a), buf, parse_mode="HTML")
+            await tg.broadcast(bot, ADMIN_CHAT_IDS, format_alert(a), buf, parse_mode="HTML",
+                               reply_markup=tg.live_markup(a.symbol, getattr(a, "sent_ts", None)))
             buf = None
             sent += 1
             logger.info(f"Pump alert: {a.symbol} {a.kind} skor={a.score} "

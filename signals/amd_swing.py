@@ -127,10 +127,11 @@ async def _run(bot, force: bool = False):
                 if conflicts_with_btc_regime(s.symbol, s.side, regime):
                     logger.info(f"{s.symbol} [{prof}]: BTC rejimiga zid, o'tkazildi")
                     continue
-                await asyncio.to_thread(record_signal, s)
+                s.sent_ts = await asyncio.to_thread(record_signal, s)
                 buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                                           tg.levels_of(s), s.tf, tg.meta_of(s, P))
-                await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML")
+                await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML",
+                                   reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)))
                 sent += 1
     return sent, found
 
