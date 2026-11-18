@@ -46,6 +46,7 @@ def _init():
                 sl DOUBLE PRECISION NOT NULL,
                 tp1 DOUBLE PRECISION NOT NULL,
                 tp2 DOUBLE PRECISION NOT NULL,
+                tp3 DOUBLE PRECISION,
                 rr1 DOUBLE PRECISION NOT NULL,
                 rr2 DOUBLE PRECISION NOT NULL,
                 sent_ts BIGINT NOT NULL,
@@ -60,6 +61,14 @@ def _init():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_status ON signals (status, tf)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_sym ON signals (symbol, tf, sent_ts)")
+    # eski bazalar uchun migratsiya: tp3 ustuni (alohida tranzaksiya — xato bo'lsa keyingisiga ta'sir qilmasin)
+    try:
+        with db.tx() as conn:
+            conn.execute("ALTER TABLE signals ADD COLUMN IF NOT EXISTS tp3 DOUBLE PRECISION"
+                         if db.BACKEND == "postgres" else
+                         "ALTER TABLE signals ADD COLUMN tp3 DOUBLE PRECISION")
+    except Exception:
+        pass            # ustun allaqachon bor
 
 
 # ------------------------------------------------------------------ yozish
@@ -68,9 +77,9 @@ def record_signal(sig):
     with db.tx() as conn:
         conn.execute(
             "INSERT INTO signals (symbol, tf, side, score, entry, sl, tp1, tp2, rr1, rr2, "
-            "sent_ts, checked_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "sent_ts, checked_ts, tp3) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (sig.symbol, sig.tf, sig.side, sig.score, sig.entry, sig.sl, sig.tp1, sig.tp2,
-             sig.rr1, sig.rr2, int(time.time()), sig.ts),
+             sig.rr1, sig.rr2, int(time.time()), sig.ts, getattr(sig, "tp3", None)),
         )
 
 
@@ -89,23 +98,27 @@ def recently_signaled(symbol: str, tf: str, cooldown_sec: int) -> bool:
 
 
 # --------------------------------------------------------------- baholash
-def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int) -> List[dict]:
+def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int,
+                     events: Optional[list] = None) -> List[dict]:
     """Shu taymfreymdagi ochiq signallarni yangi YOPILGAN shamlar bilan tekshiradi.
-    Yangi yopilganlar ro'yxatini qaytaradi."""
+    Yangi yopilganlar ro'yxatini qaytaradi. `events` berilsa — oraliq bosqichlar (TP1/TP2 olindi,
+    pozitsiya hali ochiq) ham shu ro'yxatga qo'shiladi: {"symbol","side","stage","three","tp"...}."""
     with db.tx() as conn:
         rows = conn.execute(
-            "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit "
+            "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit, tp3 "
             "FROM signals WHERE status='open' AND tf=?", (tf,)
         ).fetchall()
 
     closed = []
-    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked, n, hit1) in rows:
+    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked, n, hit1, tp3) in rows:
         try:
             c = get_klines_fn(symbol, interval, 200)   # tarmoq — tranzaksiyadan TASHQARIDA
             if not c:
                 continue
             c = c[:-1]                                  # faqat yopilgan shamlar
-            hit1 = bool(hit1)
+            three = tp3 is not None
+            stage0 = int(hit1 or 0)                     # tp1_hit ustuni: 0/1 (2 ta TP) yoki 0..2 (3 ta TP)
+            hit1 = stage0 if three else bool(hit1)
             status: Optional[str] = None
             gross: Optional[float] = None
 
@@ -114,13 +127,19 @@ def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int)
                     continue
                 checked = x[0]
                 n += 1
-                hit1, status, gross = sim.step(side, entry, sl, tp1, tp2, rr1, rr2,
-                                               hit1, x[2], x[3])
+                if three:
+                    rr3 = abs(tp3 - entry) / abs(entry - sl) if entry != sl else 3.0
+                    hit1, status, gross = sim.step3(side, entry, sl, tp1, tp2, tp3, rr1, rr2, rr3,
+                                                    hit1, x[2], x[3])
+                else:
+                    hit1, status, gross = sim.step(side, entry, sl, tp1, tp2, rr1, rr2,
+                                                   hit1, x[2], x[3])
                 if status:
                     break
                 if n >= expire_candles:
                     status = "expired"
-                    gross = sim.expire_gross(side, entry, sl, rr1, hit1, x[4])
+                    gross = (sim.expire_gross3(side, entry, sl, rr1, rr2, hit1, x[4]) if three
+                             else sim.expire_gross(side, entry, sl, rr1, hit1, x[4]))
                     break
 
             if status:
@@ -133,6 +152,9 @@ def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int)
             else:
                 upd = "UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=? WHERE id=? AND status='open'"
                 args = (checked, n, int(hit1), row_id)
+                if events is not None and int(hit1) > stage0:       # yangi bosqich: TP1 yoki TP2 olindi
+                    events.append({"symbol": symbol, "side": side, "stage": int(hit1), "three": three,
+                                   "tp1": tp1, "tp2": tp2, "tp3": tp3, "entry": entry})
             with db.tx() as conn:
                 conn.execute(upd, args)
         except Exception as e:

@@ -72,3 +72,44 @@ def expire_gross(side: str, entry: float, sl: float, rr1: float,
     if hit1:
         return 0.5 * rr1 + 0.5 * max(r_close, 0.0)   # qolgan qism uchun stop = breakeven
     return max(r_close, -1.0)
+
+
+# ----------------------------------------------------------- 3 ta TP (kuchli impuls)
+# Pozitsiya 40/30/30: TP1 da 40% yopiladi va SL -> kirish (BE); TP2 da yana 30% va SL -> TP1;
+# TP3 da qolgan 30%. (stage: 0 = hali TP1 yo'q, 1 = TP1 olingan, 2 = TP2 olingan)
+W3 = (0.4, 0.3, 0.3)
+
+
+def step3(side: str, entry: float, sl: float, tp1: float, tp2: float, tp3: float,
+          rr1: float, rr2: float, rr3: float, stage: int, hi: float, lo: float
+          ) -> Tuple[int, Optional[str], Optional[float]]:
+    """Bitta YOPILGAN sham. Qaytaradi: (stage, status|None, gross_R|None).
+    status: 'sl' | 'be' | 'lock' (TP1+TP2 olingan, qoldiq TP1 da yopildi) | 'tp3' | None."""
+    long_ = side == "LONG"
+    stop = sl if stage == 0 else (entry if stage == 1 else tp1)
+    if (lo <= stop) if long_ else (hi >= stop):
+        if stage == 0:
+            return 0, "sl", -1.0
+        if stage == 1:
+            return 1, "be", W3[0] * rr1
+        return 2, "lock", W3[0] * rr1 + W3[1] * rr2 + W3[2] * rr1
+    if stage == 0 and ((hi >= tp1) if long_ else (lo <= tp1)):
+        stage = 1
+    if stage == 1 and ((hi >= tp2) if long_ else (lo <= tp2)):
+        stage = 2
+    if stage == 2 and ((hi >= tp3) if long_ else (lo <= tp3)):
+        return 3, "tp3", W3[0] * rr1 + W3[1] * rr2 + W3[2] * rr3
+    return stage, None, None
+
+
+def expire_gross3(side: str, entry: float, sl: float, rr1: float, rr2: float,
+                  stage: int, last_close: float) -> float:
+    risk = abs(entry - sl)
+    if risk <= 0:
+        return 0.0
+    r_close = ((last_close - entry) if side == "LONG" else (entry - last_close)) / risk
+    if stage == 0:
+        return max(r_close, -1.0)
+    if stage == 1:
+        return W3[0] * rr1 + (1 - W3[0]) * max(r_close, 0.0)
+    return W3[0] * rr1 + W3[1] * rr2 + W3[2] * max(r_close, rr1)

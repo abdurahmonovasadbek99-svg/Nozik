@@ -71,7 +71,7 @@ def generate_pump_chart(a) -> Optional[BytesIO]:
         ax.bar(xs, [abs(x[4] - x[1]) or 1e-12 for x in c], bottom=[min(x[1], x[4]) for x in c],
                width=0.62, color=cols)
 
-        levels = [(a.tp2, GREEN, "TP2"), (a.tp1, GREEN, "TP1"), (a.entry, AMBER, "Вход"), (a.sl, RED, "SL")]
+        levels = ([(a.tp3, GREEN, "TP3")] if getattr(a, "tp3", None) else []) + [(a.tp2, GREEN, "TP2"), (a.tp1, GREEN, "TP1"), (a.entry, AMBER, "Вход"), (a.sl, RED, "SL")]
         ys = [x[3] for x in c] + [x[2] for x in c] + [v for v, _, _ in levels]
         ymin, ymax = min(ys), max(ys)
         pad = (ymax - ymin) * 0.05 or ymax * 0.01
