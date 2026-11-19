@@ -22,8 +22,10 @@ Barcha funksiyalar sinxron. Async koddan: await asyncio.to_thread(...)
 """
 from __future__ import annotations
 
+import bisect
 import gc
 import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -46,6 +48,7 @@ MAX_RETRACE = 0.40           # impulsning 40% idan ko'p qaytgan bo'lsa — endi 
 # sym -> deque[(ts, price, oi_value)]   (oi_value 0 = ma'lumot yo'q)
 _HIST: Dict[str, Deque[Tuple[float, float, float]]] = {}
 _MEM_SENT: Dict[Tuple[str, str], float] = {}     # DB ishlamasa zaxira cooldown
+_TK: Dict[str, dict] = {}                         # sym -> {spread %, funding %} (tickers'dan, qo'shimcha so'rovsiz)
 STATE = {"scans": 0, "first_ts": 0.0, "last_ts": 0.0, "universe": 0,
          "candidates": 0, "alerts": 0, "last_error": ""}
 
@@ -78,6 +81,14 @@ class Alert:
     rr3: Optional[float] = None
     trend: Optional[str] = None          # 1h trend: "up" | "down" | "flat" | None (ma'lumot yo'q)
     line_broken: Optional[bool] = None   # 1h trend chizig'i buzilganmi (None — chiziq yo'q/ma'lumot yo'q)
+    corr: Optional[float] = None         # v6.4: BTC bilan korrelyatsiya (5m daromadlar)
+    beta: Optional[float] = None
+    resid: Optional[float] = None        # BTC ta'siri ayirilgan 5m/15m harakat (% , yo'nalish tomonida eng kattasi)
+    spread: Optional[float] = None
+    funding: Optional[float] = None      # %
+    pressure: float = 0.0                # harakat tomonidagi sotib olish/sotish bosimi (-1..+1)
+    ob_share: Optional[float] = None     # harakat tomonidagi orderbook ulushi (0..1)
+    move_atr: float = 0.0
     reasons: List[str] = field(default_factory=list)
     candles: list = field(default_factory=list)      # grafik uchun oxirgi 1m shamlar (DB ga yozilmaydi)
     tf: str = TF
@@ -110,6 +121,11 @@ def _update_history(items: List[dict], now: float) -> List[Tuple[str, float, flo
         if price <= 0 or not (C.PUMP_MIN_TURNOVER_USDT <= turn <= C.PUMP_MAX_TURNOVER_USDT):
             continue
         oi = _f(t.get("openInterestValue"))
+        bid, ask = _f(t.get("bid1Price")), _f(t.get("ask1Price"))
+        _TK[sym] = {
+            "spread": ((ask - bid) / ((ask + bid) / 2) * 100) if bid > 0 and ask >= bid else None,
+            "funding": (_f(t.get("fundingRate")) * 100) if t.get("fundingRate") not in (None, "") else None,
+        }
         h = _HIST.setdefault(sym, deque())
         h.append((now, price, oi))
         while h and h[0][0] < now - HIST_SECONDS:
@@ -119,6 +135,7 @@ def _update_history(items: List[dict], now: float) -> List[Tuple[str, float, flo
     for sym in list(_HIST):          # universe'dan chiqib ketganlarni tozalaymiz
         if sym not in seen:
             del _HIST[sym]
+            _TK.pop(sym, None)
     return uni
 
 
@@ -168,6 +185,66 @@ def _base_volume(base: list) -> float:
     trimmed = vs[:-k]
     m = sum(trimmed) / len(trimmed) if trimmed else 0.0
     return m if m > 0 else sum(vs) / len(vs)
+
+
+# ------------------------------------------------- v6.4: BTC beta / bosim / ATR
+def _atr_range(c: list, start: int, end: int) -> float:
+    """c[start:end] shamlar bo'yicha o'rtacha True Range (start >= 1)."""
+    s, n = 0.0, 0
+    for k in range(max(1, start), end):
+        x, pc = c[k], c[k - 1][4]
+        s += max(x[2] - x[3], abs(x[2] - pc), abs(x[3] - pc))
+        n += 1
+    return s / n if n else 0.0
+
+
+def _pressure(cs: list) -> float:
+    """Sotib olish/sotish bosimi (-1..+1): hajm * (yopilish joyi diapazonda). Haqiqiy taker/CVD ma'lumoti
+    1m shamda yo'q — bu uning sham bo'yicha taxminiy o'rnini bosadi."""
+    num = den = 0.0
+    for x in cs:
+        rng, v = x[2] - x[3], x[5]
+        if rng > 0 and v > 0:
+            num += v * (2 * (x[4] - x[3]) / rng - 1)
+            den += v
+    return num / den if den > 0 else 0.0
+
+
+def btc_context(btc1: Optional[list], btc5: Optional[list], coin5: Optional[list],
+                skip_last: int = 6, n: int = 100) -> Optional[dict]:
+    """Coinning BTC bilan korrelyatsiyasi va betasi (5m FOIZ o'zgarishlari, narxning o'zi emas).
+    btc5 / coin5 — faqat YOPILGAN shamlar. Oxirgi `skip_last` ta (~30 daq.) tashlanadi, shunda
+    pumpning o'zi korrelyatsiyani buzmaydi. Yetarli ma'lumot yo'q bo'lsa None."""
+    if not btc1 or not btc5 or not coin5:
+        return None
+    bc = {x[0]: x[4] for x in btc5}
+    cc = {x[0]: x[4] for x in coin5}
+    ts = sorted(t for t in cc if t in bc and (t - 300000) in cc and (t - 300000) in bc)
+    ts = ts[:-skip_last] if skip_last else ts
+    ts = ts[-n:]
+    if len(ts) < 40:
+        return None
+    rc = [cc[t] / cc[t - 300000] - 1 for t in ts]
+    rb = [bc[t] / bc[t - 300000] - 1 for t in ts]
+    mc, mb = sum(rc) / len(rc), sum(rb) / len(rb)
+    cov = sum((a - mc) * (b - mb) for a, b in zip(rc, rb)) / (len(rc) - 1)
+    vb = sum((b - mb) ** 2 for b in rb) / (len(rb) - 1)
+    vc = sum((a - mc) ** 2 for a in rc) / (len(rc) - 1)
+    if vb <= 0 or vc <= 0:
+        return None
+    corr = cov / math.sqrt(vb * vc)
+    beta = max(-3.0, min(3.0, cov / vb))
+    return {"corr": corr, "beta": beta, "n": len(ts), "c1": btc1}
+
+
+def _btc_move(btc1: Optional[list], t0_ms: int) -> Optional[float]:
+    """BTC ning t0 (1m sham ochilish vaqti) dan hozirgacha harakati, %. Topilmasa None."""
+    if not btc1:
+        return None
+    for x in btc1:
+        if x[0] == t0_ms and x[1] > 0:
+            return (btc1[-1][4] / x[1] - 1) * 100
+    return None
 
 
 # ------------------------------------------------------------------- tahlil
@@ -240,9 +317,12 @@ def trend_ctx(c1h: Optional[list], price: float, up: bool) -> Optional[dict]:
 
 def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str = "neutral",
              turn24: float = 0.0, now_ms: Optional[int] = None,
-             c5: Optional[list] = None, c1h: Optional[list] = None) -> dict:
+             c5: Optional[list] = None, c1h: Optional[list] = None,
+             btc: Optional[dict] = None, tk: Optional[dict] = None, ob: Optional[float] = None) -> dict:
     """1m shamlar (eskidan yangiga, oxirgisi — shakllanayotgan) bo'yicha tekshiradi.
     Qaytaradi: {"alert": Alert|None, "reject": sabab|None, "m": ko'rsatkichlar}.
+    v6.4: btc (btc_context natijasi), tk (spread/funding) va ob (orderbook ulushi) ixtiyoriy — None bo'lsa
+    tegishli filtr o'tkazib yuboriladi (backtest/1-bosqich).
     Sof funksiya (tarmoqsiz) — test va /pd_check uchun ham ishlatiladi."""
     T5, T15, VX = C.PUMP_MOVE_5M_PCT, C.PUMP_MOVE_15M_PCT, C.PUMP_VOL_X
     m: dict = {"symbol": symbol}
@@ -275,12 +355,51 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
     if win_turn < C.PUMP_MIN_WINDOW_TURNOVER_USDT:
         return {"alert": None, "reject": f"оборот за 5 мин мал ({win_turn:,.0f} USDT) — неликвид", "m": m}
 
+    # --- v6.4: spread (tickers) va ATR bilan normallashtirilgan harakat
+    spread = tk.get("spread") if tk else None
+    funding = tk.get("funding") if tk else None
+    if spread is not None:
+        m["spread"] = spread
+        if C.PUMP_MAX_SPREAD_PCT > 0 and spread > C.PUMP_MAX_SPREAD_PCT:
+            return {"alert": None, "reject": f"спред {spread:.2f}% > {C.PUMP_MAX_SPREAD_PCT:g}% — неликвидный стакан", "m": m}
+    atr_base = _atr_range(c, len(c) - 19, len(c) - 5)      # harakatdan OLDINGI oddiy 1m ATR
+    move_atr = 0.0
+    if atr_base > 0:
+        move_atr = max(abs(price - last5[0][1]) / atr_base,
+                       abs(price - last15[0][1]) / (atr_base * math.sqrt(3)))
+        m["move_atr"] = move_atr
+        if C.PUMP_MIN_ATR_MULT > 0 and move_atr < C.PUMP_MIN_ATR_MULT:
+            return {"alert": None, "reject": f"движение всего {move_atr:.1f}×ATR < {C.PUMP_MIN_ATR_MULT:g}×ATR — шум", "m": m}
+
     # --- kech qolganlik (30 daqiqadagi umumiy yurish)
     lo30, hi30 = min(x[3] for x in last30), max(x[2] for x in last30)
     ext = (price / lo30 - 1) * 100 if up else (hi30 / price - 1) * 100
     m["ext"] = ext
     if ext > C.PUMP_MAX_EXT_PCT:
         return {"alert": None, "reject": f"уже ушла на {ext:.0f}% за 30 мин — поздно", "m": m}
+
+    # --- v6.4: BTC beta / residual (BTC ta'siri ayirilgan harakat) va korrelyatsiyaga mos BTC filtri
+    corr = beta = resid = None
+    corr_w = 1.0                      # BTC rejimiga qarshi jarima koeffitsienti (corr noma'lum bo'lsa — to'liq, eski xatti-harakat)
+    rres = None
+    if btc and btc.get("corr") is not None and C.PUMP_USE_BTC_BETA:
+        corr, beta = btc["corr"], btc["beta"]
+        corr_w = 1.0 if corr >= C.PUMP_CORR_HIGH else 0.5 if corr >= C.PUMP_CORR_LOW else 0.0
+        b5m, b15m = _btc_move(btc.get("c1"), last5[0][0]), _btc_move(btc.get("c1"), last15[0][0])
+        m.update(corr=corr, beta=beta, btc5=b5m)
+        sg = 1 if up else -1
+        if corr_w > 0 and b5m is not None and C.PUMP_BTC_FLASH_PCT > 0 and corr >= C.PUMP_CORR_HIGH \
+                and b5m * sg <= -C.PUMP_BTC_FLASH_PCT:
+            return {"alert": None, "reject": f"BTC резко против ({b5m:+.2f}% / 5м), корреляция {corr:.2f}", "m": m}
+        if corr_w > 0 and b5m is not None:
+            r5 = (ch5 - beta * b5m) * sg
+            r15 = ((ch15 - beta * b15m) * sg) if b15m is not None else None
+            rres = max(r5 / T5, (r15 / T15) if r15 is not None else -9)
+            resid = max(r5, r15 if r15 is not None else -9) * sg
+            m.update(resid=resid, rres=rres)
+            if C.PUMP_RESID_MIN_RATIO > 0 and rres < C.PUMP_RESID_MIN_RATIO:
+                return {"alert": None, "reject": f"движение объясняется BTC (β {beta:.1f}, corr {corr:.2f}): "
+                                                 f"собственное {rres * 100:.0f}% порога < {C.PUMP_RESID_MIN_RATIO * 100:.0f}%", "m": m}
 
     # --- impuls va qaytish
     i_lo = min(range(len(last15)), key=lambda i: last15[i][3])
@@ -302,6 +421,17 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         return {"alert": None, "reject": "нет импульса", "m": m}
     if retr > MAX_RETRACE:
         return {"alert": None, "reject": f"откат {retr * 100:.0f}% импульса — уже разворачивается", "m": m}
+
+    # --- v6.4: qarshi soya (rad etilish): oxirgi 2 shamda uzun teskari soya
+    if C.PUMP_MAX_WICK_FRAC > 0 and atr_base > 0:
+        for x in c[-2:]:
+            rng = x[2] - x[3]
+            if rng < 0.8 * atr_base:
+                continue
+            wick = (x[2] - max(x[1], x[4])) if up else (min(x[1], x[4]) - x[3])
+            if wick / rng > C.PUMP_MAX_WICK_FRAC:
+                return {"alert": None, "reject": f"длинная {'верхняя' if up else 'нижняя'} тень "
+                                                 f"({wick / rng * 100:.0f}% свечи) — отторжение уровня", "m": m}
 
     # --- vertikal "blow-off" cho'qqiga kirmaslik: impuls zinapoya (kamida bir oz orqaga qaytish) bo'lishi kerak.
     # Yo'l bo'yicha eng chuqur orqaga qaytish (running extreme'dan) impulsning PUMP_MIN_PULLBACK ulushidan kam bo'lsa —
@@ -344,10 +474,15 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
     # --- qat'iy rejim: faqat aniq, davom etayotgan harakat
     n_dir = sum(1 for x in c[-4:] if (x[4] > x[1]) == up)
     breakout = _is_breakout(c5, price, up) if c5 else None
+    pr = _pressure(last5)
+    aligned_p = pr if up else -pr
+    m["pressure"] = aligned_p
     m["breakout"] = breakout
     if C.PUMP_STRICT:
         if n_dir < 3 or (c[-2][4] > c[-2][1]) != up:
             return {"alert": None, "reject": "нет продолжения: свечи не в сторону движения", "m": m}
+        if aligned_p < C.PUMP_MIN_PRESSURE:
+            return {"alert": None, "reject": f"давление {'покупателей' if up else 'продавцов'} слабое ({aligned_p:+.2f} < {C.PUMP_MIN_PRESSURE:g})", "m": m}
         if oi_chg is not None and oi_chg <= -2.0:
             return {"alert": None, "reject": f"OI {oi_chg:+.1f}% — это закрытие позиций, а не новый спрос", "m": m}
         if breakout is False:
@@ -365,7 +500,7 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
 
     # --- ball
     reasons: List[str] = []
-    score = 35.0
+    score = 30.0                      # v6.4: 35 -> 30 (yangi ball omillari qo'shildi)
     mr = max(r5, r15)
     score += min(20.0, 10 + (mr - 1) * 10)
     reasons.append(f"Движение {ch5:+.1f}% / 5м, {ch15:+.1f}% / 15м")
@@ -403,10 +538,29 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         else:
             score -= 5
             reasons.append("Разворот: против 1ч EMA, но линия тренда пробита")
-    conflict = conflicts_with_btc_regime(symbol, side, regime)
+    if aligned_p >= 0.35:
+        score += 5
+        reasons.append(f"Давление {'покупателей' if up else 'продавцов'} {aligned_p:+.2f}")
+    if rres is not None and rres >= 1.0:
+        score += 5
+        reasons.append(f"Собственное движение (без BTC) {resid:+.1f}%")
+    if funding is not None:
+        m["funding"] = funding
+        if (up and funding >= C.PUMP_FUNDING_EXTREME) or ((not up) and funding <= -C.PUMP_FUNDING_EXTREME):
+            score -= 8
+            reasons.append(f"Funding {funding:+.2f}% — толпа уже в этой стороне")
+    if ob is not None:
+        m["ob_share"] = ob
+        if ob >= C.PUMP_OB_GOOD:
+            score += 5
+            reasons.append(f"Стакан за движение ({ob * 100:.0f}%)")
+        elif ob <= C.PUMP_OB_BAD:
+            score -= 5
+            reasons.append(f"Стакан против ({ob * 100:.0f}%)")
+    conflict = conflicts_with_btc_regime(symbol, side, regime) and corr_w > 0
     if conflict:
-        score -= C.PUMP_BTC_PENALTY
-        reasons.append("Против тренда BTC")
+        score -= C.PUMP_BTC_PENALTY * corr_w
+        reasons.append("Против тренда BTC" + (f" (corr {corr:.2f})" if corr is not None else ""))
     score_i = max(0, min(100, int(round(score))))
     m["score"] = score_i
     if score_i < C.PUMP_MIN_SCORE:
@@ -430,7 +584,8 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         peak_x=peak_x, oi_chg=oi_chg, ext=ext, retr=retr, turn24=turn24,
         btc_conflict=conflict, breakout=breakout, reasons=reasons, tp3=tp3, rr3=rr3,
         trend=(tc["trend"] if tc else None), line_broken=(tc["broken"] if tc else None),
-        candles=c[-60:])
+        corr=corr, beta=beta, resid=resid, spread=spread, funding=funding, pressure=aligned_p,
+        ob_share=ob, move_atr=move_atr, candles=c[-60:])
     return {"alert": alert, "reject": None, "m": m}
 
 
@@ -484,6 +639,59 @@ def mark_sent(a: Alert):
     _MEM_SENT[(a.symbol, a.side)] = time.time()
 
 
+# ---------------------------------------------------- v6.4: 2-bosqich yordamchilari
+def _load_btc(store: dict) -> None:
+    """BTC 1m/5m shamlari — skanda BIR marta (faqat nomzod 2-bosqichga o'tsa)."""
+    if store.get("done"):
+        return
+    store["done"] = True
+    try:
+        c1 = A.bybit_klines("BTCUSDT", "1", 60)
+        time.sleep(0.1)
+        c5 = A.bybit_klines("BTCUSDT", "5", 130)
+        time.sleep(0.1)
+        store["c1"], store["c5"] = c1, (c5[:-1] if c5 else None)
+    except Exception as e:
+        logger.warning(f"BTC ma'lumoti olinmadi: {e}")
+
+
+def _fetch_ob_share(sym: str, up: bool) -> Optional[float]:
+    """Orderbook (25 daraja): harakat tomonidagi hajm ulushi (0..1). Olinmasa None."""
+    d = A._get("https://api.bybit.com/v5/market/orderbook", {"category": "linear", "symbol": sym, "limit": 25})
+    time.sleep(0.1)
+    try:
+        if not d or d.get("retCode") != 0:
+            return None
+        r = d["result"]
+        bids = sum(float(x[0]) * float(x[1]) for x in r.get("b", []))
+        asks = sum(float(x[0]) * float(x[1]) for x in r.get("a", []))
+        if bids + asks <= 0:
+            return None
+        share = bids / (bids + asks)
+        return share if up else 1 - share
+    except Exception:
+        return None
+
+
+def _full_eval(sym: str, c: list, oi: Optional[float], regime: str, turn: float, res: dict, btc_store: dict) -> dict:
+    """1-bosqichdan o'tgan nomzod uchun to'liq tekshiruv: 5m + 1h + BTC beta + orderbook."""
+    tk = _TK.get(sym)
+    c5 = A.bybit_klines(sym, "5", 130)
+    time.sleep(0.1)
+    c1h = _fetch_1h_closed(sym) if C.PUMP_TREND_FILTER else None
+    btc = None
+    if C.PUMP_USE_BTC_BETA and c5:
+        _load_btc(btc_store)
+        btc = btc_context(btc_store.get("c1"), btc_store.get("c5"), c5[:-1])
+    res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h, btc=btc, tk=tk)
+    a = res["alert"]
+    if a and C.PUMP_USE_ORDERBOOK:
+        share = _fetch_ob_share(sym, a.kind == "PUMP")
+        if share is not None:
+            res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h, btc=btc, tk=tk, ob=share)
+    return res
+
+
 # --------------------------------------------------------------------- skan
 def scan() -> List[Alert]:
     """Bitta skan: tickers -> nomzodlar -> 1m tahlil. Yuboriladigan Alert'lar (ball bo'yicha)."""
@@ -516,18 +724,16 @@ def scan() -> List[Alert]:
             regime = "neutral"
 
     out: List[Alert] = []
+    btc_store: dict = {}
     for _, sym, turn in cands:
         c = A.bybit_klines(sym, "1", 60)
         time.sleep(0.1)
         if not c:
             continue
         oi = _oi_change(sym, now)
-        res = evaluate(sym, c, oi, regime, turn)
-        if res["alert"]:                      # 2-bosqich: 5m kontekst (diapazon sinishi) + 1h trend
-            c5 = A.bybit_klines(sym, "5", 130)
-            time.sleep(0.1)
-            c1h = _fetch_1h_closed(sym) if C.PUMP_TREND_FILTER else None
-            res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h)
+        res = evaluate(sym, c, oi, regime, turn, tk=_TK.get(sym))
+        if res["alert"]:                      # 2-bosqich: 5m (diapazon) + 1h trend + BTC beta + orderbook
+            res = _full_eval(sym, c, oi, regime, turn, res, btc_store)
         a = res["alert"]
         if not a:
             logger.debug(f"Pump {sym}: {res['reject']}")
@@ -557,10 +763,9 @@ def check(symbol: str) -> Optional[dict]:
         except Exception:
             pass
     oi = _oi_change(symbol, now)
-    res = evaluate(symbol, c, oi, regime)
+    res = evaluate(symbol, c, oi, regime, tk=_TK.get(symbol))
     if res["alert"]:
-        c1h = _fetch_1h_closed(symbol) if C.PUMP_TREND_FILTER else None
-        res = evaluate(symbol, c, oi, regime, c5=A.bybit_klines(symbol, "5", 130), c1h=c1h)
+        res = _full_eval(symbol, c, oi, regime, 0.0, res, {})
     return res
 
 
@@ -582,6 +787,19 @@ def format_alert(a: Alert) -> str:
     tr = {"up": "↑ вверх", "down": "↓ вниз", "flat": "→ боковик"}.get(a.trend or "", "")
     if tr:
         brk += f"📐 Тренд 1ч: {tr}" + (" · линия тренда пробита" if a.line_broken else "") + "\n"
+    extra = ""
+    if a.corr is not None:
+        own = f" · своё движение {a.resid:+.1f}%" if a.resid is not None else ""
+        extra += f"🔗 BTC: corr {a.corr:.2f} · β {a.beta:.1f}{own}\n"
+    bits = []
+    if a.spread is not None:
+        bits.append(f"спред {a.spread:.2f}%")
+    if a.funding is not None:
+        bits.append(f"funding {a.funding:+.3f}%")
+    if a.ob_share is not None:
+        bits.append(f"стакан {a.ob_share * 100:.0f}% за")
+    bits.append(f"давление {a.pressure:+.2f}")
+    extra += "⚖️ " + " · ".join(bits) + "\n"
     tp3_line = ""
     if a.tp3:
         tp3_line = (f"🏆 TP3: <code>{p(a.tp3)}</code> ({_pct(a, a.tp3)}) — сильный импульс\n"
@@ -592,7 +810,7 @@ def format_alert(a: Alert) -> str:
         f"📈 {a.ch5:+.1f}% за 5 мин · {a.ch15:+.1f}% за 15 мин\n"
         f"📊 Объём: x{a.vol_x:.1f} от нормы (пик x{a.peak_x:.1f})\n"
         f"🧭 OI: {oi} · оборот 24ч: {a.turn24 / 1e6:.1f}M USDT\n"
-        f"{brk}"
+        f"{brk}{extra}"
         f"⭐ Скор: {a.score}/100"
         f"{'  ⚠️ против BTC' if a.btc_conflict else ''}\n"
         f"{line}\n"
@@ -628,6 +846,19 @@ def format_check(symbol: str, res: dict) -> str:
         lines.append(f"Риск {m['risk_pct']:.1f}% · издержки {m['cost_r']:.2f}R (макс. {C.PUMP_MAX_COST_R:.2f}R)")
     if m.get("trend"):
         lines.append(f"Тренд 1ч: {m['trend']}" + (", линия пробита ✅" if m.get("line_broken") else ""))
+    if "move_atr" in m:
+        lines.append(f"Движение в ATR: {m['move_atr']:.1f}× (нужно от {C.PUMP_MIN_ATR_MULT:g}×)")
+    if "spread" in m:
+        lines.append(f"Спред: {m['spread']:.2f}% (макс. {C.PUMP_MAX_SPREAD_PCT:g}%)")
+    if "pressure" in m:
+        lines.append(f"Давление: {m['pressure']:+.2f} (нужно от {C.PUMP_MIN_PRESSURE:g})")
+    if "corr" in m:
+        lines.append(f"BTC: corr {m['corr']:.2f}, β {m['beta']:.2f}" +
+                     (f", своё движение {m['resid']:+.1f}%" if m.get("resid") is not None else ", BTC-фильтр не применяется (низкая корреляция)"))
+    if m.get("funding") is not None:
+        lines.append(f"Funding: {m['funding']:+.3f}%")
+    if m.get("ob_share") is not None:
+        lines.append(f"Стакан за движение: {m['ob_share'] * 100:.0f}%")
     if "score" in m:
         lines.append(f"Скор: {m['score']}/100 (порог {C.PUMP_MIN_SCORE})")
     lines.append("")
@@ -656,7 +887,7 @@ def _aggregate_5m(c1: list) -> list:
     return out
 
 
-def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
+def backtest(symbol: str, bars: Optional[int] = None, btc_hist: Optional[list] = None) -> Optional[dict]:
     """Detektorni tarixiy 1m ma'lumotda sinaydi (jonli bilan bir xil evaluate()).
     Kirish = signal shamining yopilish narxi; SL/TP 1m shamlar bilan (bir shamda ikkalasi
     urilsa SL hisoblanadi); xarajatlar R da ayriladi. OI va BTC rejimi tarixda yo'q — hisobga olinmaydi."""
@@ -668,6 +899,13 @@ def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
     h1: list = []
     if C.PUMP_TREND_FILTER:                    # 1h tarix: signal paytida faqat YOPILGAN 1h shamlar (kelajakka qarash yo'q)
         h1 = A.bybit_klines_history(symbol, "60", len(c1) // 60 + 130)
+    bt1_ts: list = []
+    bt5: list = []
+    bt5_ts: list = []
+    if btc_hist and C.PUMP_USE_BTC_BETA and symbol != "BTCUSDT":      # v6.4: BTC beta tarixda ham ishlaydi
+        bt1_ts = [x[0] for x in btc_hist]
+        bt5 = _aggregate_5m(btc_hist)
+        bt5_ts = [x[0] for x in bt5]
     exp = C.PUMP_EXPIRE_CANDLES * 5            # 1m shamlarda
     cool = max(1, C.PUMP_COOLDOWN_SECONDS // 60)
     trades: List[dict] = []
@@ -680,8 +918,14 @@ def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
                 k += 1
             while kh < len(h1) and h1[kh][0] + 3600000 <= w[-1][0] + 60000:
                 kh += 1
+            btc = None
+            if bt1_ts:
+                j1 = bisect.bisect_right(bt1_ts, w[-1][0])
+                j5 = bisect.bisect_right(bt5_ts, w[-1][0] - 300000 + 60000 - 1)   # faqat yopilgan 5m
+                btc = btc_context(btc_hist[max(0, j1 - 60):j1], bt5[max(0, j5 - 130):j5],
+                                  b5[max(0, k - 130):k])
             res = evaluate(symbol, w, None, "neutral", 0.0, now_ms=w[-1][0],
-                           c5=b5[max(0, k - 130):k], c1h=(h1[max(0, kh - 120):kh] if h1 else None))
+                           c5=b5[max(0, k - 130):k], c1h=(h1[max(0, kh - 120):kh] if h1 else None), btc=btc)
         a = res["alert"]
         if not a:
             i += 1
@@ -713,8 +957,14 @@ def backtest(symbol: str, bars: Optional[int] = None) -> Optional[dict]:
 def backtest_many(symbols: List[str]) -> Optional[dict]:
     allt, per, ok = [], [], 0
     bars = 0
+    btc_hist = None
+    if C.PUMP_USE_BTC_BETA:
+        try:
+            btc_hist = A.bybit_klines_history("BTCUSDT", "1", C.PUMP_BACKTEST_BARS) or None
+        except Exception as e:
+            logger.warning(f"Backtest: BTC tarixi olinmadi: {e}")
     for sym in symbols:
-        r = backtest(sym)
+        r = backtest(sym, btc_hist=btc_hist)
         if not r:
             continue
         ok += 1
@@ -773,7 +1023,8 @@ def format_backtest(r: dict) -> str:
     if n < 30:
         lines.append("\n⚠️ Меньше 30 сделок — статистически ненадёжно. Увеличьте PUMP_BACKTEST_BARS "
                      "или проверьте больше токенов.")
-    lines.append("\nℹ️ OI и режим BTC в истории недоступны, поэтому в бэктесте они не участвуют "
+    lines.append("\nℹ️ В бэктесте участвуют: BTC corr/β/residual, ATR, давление, тени. "
+                 "Недоступны в истории: OI, funding, спред, стакан, 6ч-режим BTC "
                  "(в боте они дополнительно фильтруют).")
     return "\n".join(lines)
 
@@ -956,6 +1207,9 @@ def settings_text() -> str:
         f"Оборот 24ч: {C.PUMP_MIN_TURNOVER_USDT / 1e6:g}M — {C.PUMP_MAX_TURNOVER_USDT / 1e6:g}M USDT\n"
         f"Фильтры v6.2: тренд 1ч {'да' if C.PUMP_TREND_FILTER else 'нет'} | мин. откат {C.PUMP_MIN_PULLBACK * 100:.0f}% | "
         f"SL +{C.PUMP_SL_ATR:g}×ATR | макс. издержки {C.PUMP_MAX_COST_R:.2f}R | SL-cooldown {C.PUMP_SL_COOLDOWN_SECONDS // 60} мин\n"
+        f"Фильтры v6.4: BTC β/residual {'да' if C.PUMP_USE_BTC_BETA else 'нет'} (corr {C.PUMP_CORR_LOW:g}/{C.PUMP_CORR_HIGH:g}) | "
+        f"спред ≤{C.PUMP_MAX_SPREAD_PCT:g}% | ≥{C.PUMP_MIN_ATR_MULT:g}×ATR | давление ≥{C.PUMP_MIN_PRESSURE:g} | "
+        f"тень ≤{C.PUMP_MAX_WICK_FRAC * 100:.0f}% | стакан {'да' if C.PUMP_USE_ORDERBOOK else 'нет'}\n"
         f"Скан: каждые {C.PUMP_SCAN_INTERVAL_SECONDS} с | cooldown {C.PUMP_COOLDOWN_SECONDS // 60} мин | "
         f"макс. {C.PUMP_MAX_ALERTS_PER_HOUR}/час\n"
     )
