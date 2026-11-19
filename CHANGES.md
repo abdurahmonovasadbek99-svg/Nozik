@@ -1,3 +1,29 @@
+# v6.4: AMD aylanma chegarasi 500K + pump/dump sifati (BTC beta, spread, ATR, bosim, funding, orderbook)
+
+1. **AMD**: `MIN_24H_TURNOVER_USDT` standarti 3M -> **500K** USDT (config.py). amd_volume (15m) va amd_swing (1h/4h/1d) ikkalasi shuni ishlatadi.
+   Diqqat: Render'da `MIN_24H_TURNOVER_USDT` env o'zgaruvchisi qo'lda berilgan bo'lsa, u kod standartidan USTUN — uni ham 500000 qiling yoki o'chiring.
+   Pump/dump alohida chegarada qoldi (`PUMP_MIN_TURNOVER_USDT` = 1M).
+2. **BTC beta / residual** (`PUMP_USE_BTC_BETA=1`): har coin uchun oxirgi ~100 ta 5m FOIZ o'zgarishlari bo'yicha BTC bilan korrelyatsiya va beta
+   (oxirgi 30 daqiqa — pumpning o'zi — hisobdan chiqariladi). Harakatdan BTC ulushi ayiriladi: `residual = coin% - beta * BTC%`.
+   Residual chegaraning `PUMP_RESID_MIN_RATIO`(60%) idan kam bo'lsa — "bozor bilan birga ketgan soxta pump", rad.
+   Korrelyatsiya >= `PUMP_CORR_HIGH`(0.6): BTC filtri to'liq; 0.3-0.6: jarima yarmi; < `PUMP_CORR_LOW`(0.3): BTC filtri o'chadi.
+   BTC 5m da `PUMP_BTC_FLASH_PCT`(0.7%) qarshi yursa va corr yuqori bo'lsa — signal bloklanadi.
+3. **Spread** (tickers'dan, qo'shimcha so'rovsiz): `PUMP_MAX_SPREAD_PCT`(0.30%) dan keng bo'lsa rad.
+4. **ATR bilan normallashtirilgan harakat**: harakat bazaviy 1m ATR dan kamida `PUMP_MIN_ATR_MULT`(3x) katta bo'lishi kerak.
+5. **Sotib olish/sotish bosimi** (sham+hajm bo'yicha taxmin; haqiqiy taker/CVD 1m shamda yo'q): strict rejimda `PUMP_MIN_PRESSURE`(0.10) dan past bo'lsa rad; >= 0.35 bo'lsa +5.
+6. **Qarshi soya (wick)**: oxirgi 2 shamda teskari soya shamning `PUMP_MAX_WICK_FRAC`(60%) idan katta bo'lsa rad.
+7. **Funding** (tickers'dan): harakat tomonida |funding| >= `PUMP_FUNDING_EXTREME`(0.10%) bo'lsa -8 ball (olomon allaqachon shu tomonda).
+8. **Orderbook** (`PUMP_USE_ORDERBOOK=1`): faqat yakuniy signal oldidan 1 ta so'rov, 25 daraja bid/ask ulushi: >= 0.58 +5, <= 0.35 -5.
+9. Ball: boshlang'ich 35 -> 30 (yangi omillar qo'shildi). Signal matni, `/pd_check`, `/settings` va `/pd_backtest` yangilandi.
+   Backtest endi BTC corr/beta/residual, ATR, bosim, soyalarni ham hisobga oladi (OI, funding, spread, orderbook tarixda yo'q).
+
+Qo'shilmadi (alohida WebSocket kerak): likvidatsiyalar (`forceOrder`) va haqiqiy taker buy/sell, CVD.
+Eski xatti-harakat: `PUMP_USE_BTC_BETA=0 PUMP_MAX_SPREAD_PCT=0 PUMP_MIN_ATR_MULT=0 PUMP_MIN_PRESSURE=-1 PUMP_MAX_WICK_FRAC=0 PUMP_USE_ORDERBOOK=0`
+(ball bazasi 30 bo'lib qoladi — kerak bo'lsa `PUMP_MIN_SCORE` ni 65 ga tushiring).
+
+Test: faqat sintetik (BTC bilan tushuntiriladigan pump rad, mustaqil coin o'tadi, BTC flash, spread, soya, funding, orderbook, PUMP/DUMP, backtest yo'li).
+Haqiqiy Bybit ma'lumotida SAMARASI ISBOTLANMAGAN — avval `/pd_backtest`, so'ng jonli statistikani (`/pd_stats`) kuzating.
+
 # v6.3: Telegram Mini App — jonli grafik (signal rasmi ostida tugma)
 
 - Har signal (pump va AMD) rasmi ostida "📊 Живой график" tugmasi chiqadi (Telegram Mini App, WebApp).

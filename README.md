@@ -84,7 +84,7 @@ Avval 1–2 hafta `/pd_stats` ni kuzating, keyin chegaralarni sozlang.
 - **Tavsiya: `DATABASE_URL`** — doimiy PostgreSQL (Neon / Supabase bepul tarifi). Busiz statistika
   va cooldown har redeploy'da o'chadi.
 - Region: Bybit AQSh hududidan 403 beradi — Singapore yoki Frankfurt tanlang (403 logda ko'rinadi).
-- Ixtiyoriy: `ALERT_THRESHOLD`, `MIN_24H_TURNOVER_USDT`, `MAX_24H_TURNOVER_USDT`,
+- Ixtiyoriy: `ALERT_THRESHOLD`, `MIN_24H_TURNOVER_USDT` (standart 500000), `MAX_24H_TURNOVER_USDT`,
   `MAX_CANDIDATES_PER_SCAN`, `MAX_RISK_PCT`, `USE_BTC_FILTER`, `EXCLUDE_SYMBOLS`,
   `FEE_PCT` (0.055), `SLIPPAGE_PCT` (0.07), `MAX_CHASE_R` (0.5), `REQUIRE_STRUCTURE`,
   `BACKTEST_BARS` (3000), `BACKTEST_TOP_N` (12), `SWING_TIMEFRAMES`, `SWING_ALERT_THRESHOLD`,

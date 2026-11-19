@@ -48,7 +48,7 @@ SCAN_INTERVAL_SECONDS = _i("SCAN_INTERVAL_SECONDS", "300")
 REQUIRE_STRUCTURE = os.environ.get("REQUIRE_STRUCTURE", "0") == "1"
 
 # --- Universe: faqat KICHIK tokenlar ---
-MIN_24H_TURNOVER_USDT = _f("MIN_24H_TURNOVER_USDT", "3000000")
+MIN_24H_TURNOVER_USDT = _f("MIN_24H_TURNOVER_USDT", "500000")      # v6.4: AMD uchun 3M -> 500K
 MAX_24H_TURNOVER_USDT = _f("MAX_24H_TURNOVER_USDT", "300000000")
 MAX_CANDIDATES_PER_SCAN = _i("MAX_CANDIDATES_PER_SCAN", "400")
 EXCLUDE_SYMBOLS = [
@@ -91,6 +91,21 @@ PUMP_TP3_MIN_SCORE = _i("PUMP_TP3_MIN_SCORE", "80")   # kuchli impuls: ball
 PUMP_TP3_VOL_X = _f("PUMP_TP3_VOL_X", "5")            # kuchli impuls: hajm oddiydan kamida shuncha marta
 PUMP_SEND_CHART = os.environ.get("PUMP_SEND_CHART", "1") == "1"  # xabarga grafik biriktirish
 PUMP_BACKTEST_BARS = _i("PUMP_BACKTEST_BARS", "7200")         # 1m shamlar: 7200 = 5 kun
+
+# --- v6.4: pump/dump sifati (BTC beta/residual, spread, ATR, bosim, funding, orderbook) ---
+PUMP_USE_BTC_BETA = os.environ.get("PUMP_USE_BTC_BETA", "1") == "1"      # har coin uchun BTC korrelyatsiya/beta
+PUMP_CORR_HIGH = _f("PUMP_CORR_HIGH", "0.6")          # shundan yuqori: BTC filtri to'liq
+PUMP_CORR_LOW = _f("PUMP_CORR_LOW", "0.3")            # shundan past: coin BTC'ga bog'liq emas — BTC filtri o'chadi
+PUMP_RESID_MIN_RATIO = _f("PUMP_RESID_MIN_RATIO", "0.6")   # BTC ta'siri ayirilgach harakat chegaraning shuncha ulushidan kam bo'lsa — rad (0 = o'chiq)
+PUMP_BTC_FLASH_PCT = _f("PUMP_BTC_FLASH_PCT", "0.7")  # BTC 5m da shuncha % qarshi yursa va corr yuqori bo'lsa — blok (0 = o'chiq)
+PUMP_MAX_SPREAD_PCT = _f("PUMP_MAX_SPREAD_PCT", "0.30")    # bid/ask spread shundan keng bo'lsa — rad (0 = o'chiq)
+PUMP_MIN_ATR_MULT = _f("PUMP_MIN_ATR_MULT", "3")      # harakat bazaviy 1m ATR dan kamida shuncha marta katta (0 = o'chiq)
+PUMP_MIN_PRESSURE = _f("PUMP_MIN_PRESSURE", "0.10")   # sotib olish/sotish bosimi (-1..+1), strict rejimda minimal (taker/CVD o'rniga sham bo'yicha baho)
+PUMP_MAX_WICK_FRAC = _f("PUMP_MAX_WICK_FRAC", "0.60") # oxirgi 2 shamda qarshi soya shamning shuncha ulushidan katta bo'lsa — rad (0 = o'chiq)
+PUMP_FUNDING_EXTREME = _f("PUMP_FUNDING_EXTREME", "0.10")  # funding (%) shundan oshsa (harakat tomonida) — ball ayiriladi
+PUMP_USE_ORDERBOOK = os.environ.get("PUMP_USE_ORDERBOOK", "1") == "1"    # yakuniy signal oldidan orderbook tengligi (1 ta qo'shimcha so'rov)
+PUMP_OB_GOOD = _f("PUMP_OB_GOOD", "0.58")             # harakat tomonidagi bid/ask ulushi >= shu: +5 ball
+PUMP_OB_BAD = _f("PUMP_OB_BAD", "0.35")               # <= shu: -5 ball
 
 # --- Haqiqiy xarajatlar (BIR TOMON uchun, %). Backtest va statistika R'dan ayriladi ---
 # Bybit USDT-perp taker ~0.055%. Slippage kichik tokenlarda 0.05-0.15% bo'lishi mumkin.
