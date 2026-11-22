@@ -66,7 +66,8 @@ async def _send_signal(bot, s):
     buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                               tg.levels_of(s), s.tf, tg.meta_of(s, CFG))
     await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf, parse_mode="HTML",
-                       reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)))
+                       reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)),
+                       track=(s.symbol, s.tf, getattr(s, "sent_ts", None)))
 
 
 async def _run_scan(bot, force: bool = False):
@@ -126,6 +127,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/pd_check <SYMBOL> — pump/dump-статус одной монеты\n"
         "/pd_stats — статистика детектора pump/dump\n"
         "/pd_backtest [SYMBOL] — бэктест pump/dump\n"
+        "/pd_detail — разбор pump/dump: время, балл, MFE/MAE\n"
         "/report — отчёт за 24 часа и 7 дней\n"
         "/settings — текущие настройки\n"
         "/myid — ваш Telegram ID",
@@ -369,17 +371,20 @@ async def scheduled_weekly_report(context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_evaluate(context: ContextTypes.DEFAULT_TYPE):
     """Ochiq 15m signallarni tekshiradi va natijasini xabar qiladi."""
+    events: list = []
     try:
         closed = await asyncio.to_thread(
-            evaluate_pending, bybit_klines, "15m", CFG["tf"], CFG["expire_candles"]
+            evaluate_pending, bybit_klines, "15m", CFG["tf"], CFG["expire_candles"], events
         )
     except Exception as e:
         logger.error(f"Signallarni baholashda xato: {e}")
         return
+    for ev in events:                 # TP1 olindi: SL ni breakeven'ga surish ko'rsatmasi (asl signalga reply)
+        await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.progress_text(ev, ev["tf"]),
+                        ev["symbol"], ev["tf"], ev.get("sent_ts"))
     for r in closed:
-        text = (f"{tg.RESULT_TEXT.get(r['status'], r['status'])}\n"
-                f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R")
-        await tg.broadcast(context.bot, ADMIN_CHAT_IDS, text)
+        await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.result_text(r, r["tf"]),
+                        r["symbol"], r["tf"], r.get("sent_ts"), unpin=True)
 
 
 async def background_scan(context: ContextTypes.DEFAULT_TYPE):
@@ -431,6 +436,7 @@ async def _post_init(app: Application):
         BotCommand("pd_check", "Pump/Dump: одна монета"),
         BotCommand("pd_stats", "Статистика pump/dump"),
         BotCommand("pd_backtest", "Бэктест pump/dump"),
+        BotCommand("pd_detail", "Разбор pump/dump: время, балл, MFE/MAE"),
         BotCommand("myid", "Ваш Telegram ID"),
     ])
 

@@ -146,3 +146,13 @@ SELF_PING_INTERVAL_SECONDS = _i("SELF_PING_INTERVAL_SECONDS", "240")
 # Manzil HTTPS bo'lishi shart. Render'da RENDER_EXTERNAL_URL avtomatik; boshqa joyda WEBAPP_URL bering.
 WEBAPP_URL = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
 USE_WEBAPP = os.environ.get("USE_WEBAPP", "1") == "1" and WEBAPP_URL.startswith("https://")
+
+
+# --- v6.5: signalga bog'lab yuborish, MFE/MAE, erta chiqish, SL-pauza ---
+REPLY_TO_SIGNAL = os.environ.get("REPLY_TO_SIGNAL", "1") == "1"        # TP/SL/o'zgarish xabarlari asl signalga reply bo'lib boradi
+PIN_ACTIVE_SIGNALS = os.environ.get("PIN_ACTIVE_SIGNALS", "0") == "1"  # ochiq signalni "zakrepit" qilish, yopilganda olib tashlash
+PUMP_STALE_CANDLES = _i("PUMP_STALE_CANDLES", "0")                    # 5m shamlar; 0 = o'chiq. Masalan 12 = 1 soat
+PUMP_STALE_MIN_MFE_R = _f("PUMP_STALE_MIN_MFE_R", "0.5")              # shu muddatda narx kamida shuncha R ga bormagan bo'lsa - erta chiqish
+PUMP_PAUSE_AFTER_SL = _i("PUMP_PAUSE_AFTER_SL", "3")                  # ketma-ket shuncha SL bo'lsa pump signallari pauza (0 = o'chiq)
+PUMP_PAUSE_SECONDS = _i("PUMP_PAUSE_SECONDS", "3600")
+STATS_TZ_OFFSET = _i("STATS_TZ_OFFSET", "5")                          # soat bo'yicha tahlil uchun (5 = Toshkent)

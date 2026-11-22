@@ -1,3 +1,26 @@
+# v6.5: signalga bog'langan yangiliklar + MFE/MAE + tahlil + erta chiqish + SL-pauza
+
+1. **Yangiliklar asl signalga REPLY bo'lib boradi** (`REPLY_TO_SIGNAL=1`): TP1/TP2 olindi ("SL ni suring"), SL, muddat tugadi,
+   erta chiqish — hammasi o'sha signal xabariga javob sifatida keladi. Signal xabarining Telegram id si bazada (`signal_msgs`) saqlanadi.
+   Pump, AMD 15m va 1h/4h/1d — hammasi uchun. Eski (yangilashdan oldingi) ochiq signallar uchun oddiy xabar boradi.
+   - Ixtiyoriy **zakrepit** (`PIN_ACTIVE_SIGNALS=1`): ochiq signal pin qilinadi, yopilganda pin olib tashlanadi.
+     Guruh/kanalda botga "pin messages" huquqi kerak. Standart: o'chiq.
+2. **AMD signallarida ham TP1 ko'rsatmasi**: TP1 olinganda "50% yoping, SL ni kirishga suring" xabari (avval faqat pump'da edi).
+3. **MFE/MAE logi**: har bitim uchun eng ko'p foyda (MFE) va eng ko'p qarshi harakat (MAE), R birligida (`signals.mfe_r`, `mae_r`;
+   ustunlar avtomatik qo'shiladi). Yopilish xabarida ham ko'rsatiladi. Faqat yangi bitimlar uchun to'planadi.
+4. **`/pd_detail`**: yopilgan bitimlar bo'yicha vaqt (Toshkent, `STATS_TZ_OFFSET=5`), ball, LONG/SHORT, shuningdek
+   MFE/MAE tahlili: muddati tugaganlar +0.5R ga yetganmi, g'oliblar qancha qoldirib ketdi, SL lar avval plyusga borganmi.
+5. **Erta chiqish** (`PUMP_STALE_CANDLES`, standart 0 = O'CHIQ): shuncha 5m shamdan keyin TP1 yo'q va MFE < `PUMP_STALE_MIN_MFE_R` (0.5)
+   bo'lsa, bitim bozor narxida "stale" sifatida yopiladi. Avval `/pd_detail` da expired MFE sini ko'ring, keyin yoqing (masalan 12).
+   Diqqat: faqat JONLI statistikada; `/pd_backtest` hali bu qoidani hisobga olmaydi.
+6. **SL-pauza** (`PUMP_PAUSE_AFTER_SL=3`, `PUMP_PAUSE_SECONDS=3600`): oxirgi 3 yopilgan pump bitimi hammasi SL bo'lsa, oxirgisidan keyin 1 soat
+   yangi pump signallari yuborilmaydi (skan ishlayveradi, narx tarixi uzilmaydi). O'chirish: `PUMP_PAUSE_AFTER_SL=0`.
+7. `/settings` va `/start` yangilandi.
+
+Allaqachon bor edi (v6.2-v6.4): BTC beta/residual filtri, 1h trend filtri, oborot chegaralari, spread, xarajat darvozasi, 40/30/30 va BE.
+
+Test: faqat sintetik (MFE/MAE, stale, reply/pin/unpin, xabar id si, breakdown, pauza). Haqiqiy bozorda samarasi ISBOTLANMAGAN.
+
 # v6.4: AMD aylanma chegarasi 500K + pump/dump sifati (BTC beta, spread, ATR, bosim, funding, orderbook)
 
 1. **AMD**: `MIN_24H_TURNOVER_USDT` standarti 3M -> **500K** USDT (config.py). amd_volume (15m) va amd_swing (1h/4h/1d) ikkalasi shuni ishlatadi.

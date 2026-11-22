@@ -77,6 +77,14 @@ Eslatma: bot qayta ishga tushganda narx tarixi ~5 daqiqa (15m chegara uchun ~15 
 Bu detektor impuls ogohlantirishi: AMD signalidan sifati pastroq, kech kirish xavfi bor.
 Avval 1–2 hafta `/pd_stats` ni kuzating, keyin chegaralarni sozlang.
 
+## v6.5: signalga bog'langan yangiliklar va tahlil
+
+- TP1/TP2/SL/muddat xabarlari asl signal xabariga **reply** bo'lib keladi (`REPLY_TO_SIGNAL=1`). Ixtiyoriy zakrepit: `PIN_ACTIVE_SIGNALS=1`.
+- `/pd_detail` — vaqt/ball/yo'nalish bo'yicha va MFE/MAE tahlili.
+- `PUMP_STALE_CANDLES` (0=o'chiq) + `PUMP_STALE_MIN_MFE_R` (0.5) — so'ngan impulsdan erta chiqish.
+- `PUMP_PAUSE_AFTER_SL` (3) + `PUMP_PAUSE_SECONDS` (3600) — ketma-ket SL dan keyin pauza.
+- `STATS_TZ_OFFSET` (5) — tahlildagi soat mintaqasi.
+
 ## Render sozlamalari
 
 - Start Command: `python bot.py`, `PYTHON_VERSION` = `3.11.9`
