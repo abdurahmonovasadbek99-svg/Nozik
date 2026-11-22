@@ -635,6 +635,23 @@ def _sent_last_hour() -> int:
         return 0
 
 
+def _paused() -> bool:
+    """Oxirgi N yopilgan pump savdosi hammasi SL bo'lsa va oxirgisi yaqinda yopilgan bo'lsa — pauza."""
+    n, sec = C.PUMP_PAUSE_AFTER_SL, C.PUMP_PAUSE_SECONDS
+    if n <= 0 or sec <= 0:
+        return False
+    try:
+        with db.tx() as conn:
+            rows = conn.execute(
+                "SELECT status, closed_ts FROM signals WHERE tf=? AND status!='open' "
+                "AND closed_ts IS NOT NULL ORDER BY closed_ts DESC LIMIT ?", (TF, n)).fetchall()
+        return (len(rows) >= n and all(r[0] == "sl" for r in rows)
+                and time.time() - int(rows[0][1]) < sec)
+    except Exception as e:
+        logger.warning(f"pump pauza tekshiruvi xatosi: {e}")
+        return False
+
+
 def mark_sent(a: Alert):
     _MEM_SENT[(a.symbol, a.side)] = time.time()
 
@@ -1048,6 +1065,10 @@ async def _run(bot) -> int:
     """Bitta skan + yuborish. Yuborilgan alertlar soni."""
     async with _lock:
         alerts = await asyncio.to_thread(scan)
+        if alerts and await asyncio.to_thread(_paused):
+            logger.info(f"Pump signallari pauzada (ketma-ket {C.PUMP_PAUSE_AFTER_SL} SL): "
+                        f"{len(alerts)} ta alert tashlandi")
+            alerts = []
         sent = 0
         for a in alerts:
             try:
@@ -1064,7 +1085,8 @@ async def _run(bot) -> int:
                     logger.warning(f"Pump grafigi chizilmadi ({a.symbol}): {e}")
             a.candles = []                    # xotirani bo'shatish
             await tg.broadcast(bot, ADMIN_CHAT_IDS, format_alert(a), buf, parse_mode="HTML",
-                               reply_markup=tg.live_markup(a.symbol, getattr(a, "sent_ts", None)))
+                               reply_markup=tg.live_markup(a.symbol, getattr(a, "sent_ts", None)),
+                               track=(a.symbol, TF, getattr(a, "sent_ts", None)))
             buf = None
             sent += 1
             logger.info(f"Pump alert: {a.symbol} {a.kind} skor={a.score} "
@@ -1085,31 +1107,24 @@ async def _job_scan(context):
 
 
 def _progress_text(ev: dict) -> str:
-    sym, side, st, three = ev["symbol"], ev["side"], ev["stage"], ev["three"]
-    if st == 1:
-        part = "40%" if three else "50%"
-        return (f"🎯 TP1 взят [pump]\n{sym} {side}: закройте ~{part}, SL перенесите на вход "
-                f"({ev['entry']:.6g})")
-    if not three:
-        return f"🎯🎯 TP2 взят [pump]\n{sym} {side}: позиция закрыта полностью."
-    return (f"🎯🎯 TP2 взят [pump]\n{sym} {side}: закройте ещё ~30%, SL перенесите на TP1 "
-            f"({ev['tp1']:.6g}), остаток — к TP3 ({ev['tp3']:.6g})")
+    return tg.progress_text(ev, "pump")
 
 
 async def _job_eval(context):
     events: list = []
     try:
         closed = await asyncio.to_thread(
-            evaluate_pending, A.bybit_klines, TF, EVAL_INTERVAL, C.PUMP_EXPIRE_CANDLES, events)
+            evaluate_pending, A.bybit_klines, TF, EVAL_INTERVAL, C.PUMP_EXPIRE_CANDLES, events,
+            C.PUMP_STALE_CANDLES, C.PUMP_STALE_MIN_MFE_R)
     except Exception as e:
         logger.error(f"Pump baholashda xato: {e}")
         return
-    for ev in events:                 # oraliq bosqichlar: pozitsiyani qo'lda boshqarish uchun ko'rsatma
-        await tg.broadcast(context.bot, ADMIN_CHAT_IDS, _progress_text(ev))
+    for ev in events:                 # oraliq bosqichlar: ko'rsatma ASL signalga reply bo'lib boradi
+        await tg.notify(context.bot, ADMIN_CHAT_IDS, _progress_text(ev),
+                        ev["symbol"], ev.get("tf", TF), ev.get("sent_ts"))
     for r in closed:
-        text = (f"{tg.RESULT_TEXT.get(r['status'], r['status'])} [pump]\n"
-                f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R")
-        await tg.broadcast(context.bot, ADMIN_CHAT_IDS, text)
+        await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.result_text(r, "pump"),
+                        r["symbol"], r.get("tf", TF), r.get("sent_ts"), unpin=True)
 
 
 async def cmd_pd_scan(update, context):
@@ -1165,9 +1180,19 @@ async def cmd_pd_stats(update, context):
         f"Открытых: {st['pending']}\n\n"
         f"TP3: {bs.get('tp3', 0)} | TP2: {bs.get('tp2', 0)} | TP1+TP2: {bs.get('lock', 0)} | "
         f"TP1+BE: {bs.get('be', 0)} | SL: {bs.get('sl', 0)} | Истёк срок: {bs.get('expired', 0)}"
+        + (f" | Затух: {bs.get('stale', 0)}" if bs.get('stale') else "")
+        + "\n\nПодробно: /pd_detail"
     )
     if st["total_closed"] < 30:
         text += "\n\n⚠️ Меньше 30 сделок — выводы делать рано."
+    await update.message.reply_text(text)
+
+
+async def cmd_pd_detail(update, context):
+    if not _is_admin(update):
+        return
+    from engine.evaluator import breakdown_text
+    text = await asyncio.to_thread(breakdown_text, TF)
     await update.message.reply_text(text)
 
 
@@ -1212,6 +1237,11 @@ def settings_text() -> str:
         f"тень ≤{C.PUMP_MAX_WICK_FRAC * 100:.0f}% | стакан {'да' if C.PUMP_USE_ORDERBOOK else 'нет'}\n"
         f"Скан: каждые {C.PUMP_SCAN_INTERVAL_SECONDS} с | cooldown {C.PUMP_COOLDOWN_SECONDS // 60} мин | "
         f"макс. {C.PUMP_MAX_ALERTS_PER_HOUR}/час\n"
+        f"v6.5: пауза после {C.PUMP_PAUSE_AFTER_SL} SL подряд на {C.PUMP_PAUSE_SECONDS // 60} мин | "
+        + (f"ранний выход: {C.PUMP_STALE_CANDLES} св. без +{C.PUMP_STALE_MIN_MFE_R:g}R"
+           if C.PUMP_STALE_CANDLES else "ранний выход: выкл")
+        + f" | ответ на сигнал: {'да' if C.REPLY_TO_SIGNAL else 'нет'}"
+        + f" | закреп: {'да' if C.PIN_ACTIVE_SIGNALS else 'нет'}\n"
     )
 
 
@@ -1221,6 +1251,7 @@ def register(app):
     app.add_handler(CommandHandler("pd_scan", cmd_pd_scan))
     app.add_handler(CommandHandler("pd_check", cmd_pd_check))
     app.add_handler(CommandHandler("pd_stats", cmd_pd_stats))
+    app.add_handler(CommandHandler("pd_detail", cmd_pd_detail))
     app.add_handler(CommandHandler("pd_backtest", cmd_pd_backtest))
     if not C.USE_PUMP_DETECTOR:
         logger.info("Pump detektori o'chirilgan (USE_PUMP_DETECTOR=0)")

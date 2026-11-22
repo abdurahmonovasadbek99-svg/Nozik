@@ -131,7 +131,8 @@ async def _run(bot, force: bool = False):
                 buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                                           tg.levels_of(s), s.tf, tg.meta_of(s, P))
                 await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML",
-                                   reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)))
+                                   reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)),
+                                   track=(s.symbol, s.tf, getattr(s, "sent_ts", None)))
                 sent += 1
     return sent, found
 
@@ -238,16 +239,19 @@ async def _job_scan(context):
 async def _job_eval(context):
     for tf in ENABLED:
         P = PROFILES[tf]
+        events: list = []
         try:
             closed = await asyncio.to_thread(
-                evaluate_pending, A.bybit_klines, tf, P["tf"], P["expire_candles"])
+                evaluate_pending, A.bybit_klines, tf, P["tf"], P["expire_candles"], events)
         except Exception as e:
             logger.error(f"Swing baholashda xato ({tf}): {e}")
             continue
+        for ev in events:
+            await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.progress_text(ev, ev["tf"]),
+                            ev["symbol"], ev["tf"], ev.get("sent_ts"))
         for r in closed:
-            text = (f"{tg.RESULT_TEXT.get(r['status'], r['status'])} [{r['tf']}]\n"
-                    f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R")
-            await tg.broadcast(context.bot, ADMIN_CHAT_IDS, text)
+            await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.result_text(r, r["tf"]),
+                            r["symbol"], r["tf"], r.get("sent_ts"), unpin=True)
 
 
 def register(app):
