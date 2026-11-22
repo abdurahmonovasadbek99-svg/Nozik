@@ -32,6 +32,7 @@ RESULT_TEXT = {
     "be": "✅ TP1 взят, остаток закрыт в безубытке",
     "sl": "❌ Сработал SL",
     "expired": "⏱ Срок сигнала истёк (позиция закрыта по рынку)",
+    "stale": "⏸ Импульс затух — закрыто досрочно по рынку",
 }
 
 
@@ -149,37 +150,107 @@ def live_markup(symbol: str, sent_ts: Optional[int]):
     return InlineKeyboardMarkup([[InlineKeyboardButton("📊 Живой график", web_app=WebAppInfo(url=url))]])
 
 
-async def send_with_chart(bot, chat_id, text: str, buf, parse_mode=None, reply_markup=None) -> None:
+async def send_with_chart(bot, chat_id, text: str, buf, parse_mode=None, reply_markup=None):
     """Admin chat'ga rasm + matn. Matn sig'masa — alohida xabar. reply_markup — tugma (rasm/matn ostida).
     Tugma xato bersa (masalan guruh chat) — xabar tugmasiz qayta yuboriladi, signal yo'qolmaydi."""
     try:
-        await _send(bot, chat_id, text, buf, parse_mode, reply_markup)
+        return await _send(bot, chat_id, text, buf, parse_mode, reply_markup)
     except Exception as e:
         if reply_markup is None:
             raise
         logger.warning(f"Tugma bilan yuborib bo'lmadi ({chat_id}): {e} — tugmasiz qayta urinaman")
-        await _send(bot, chat_id, text, buf, parse_mode, None)
+        return await _send(bot, chat_id, text, buf, parse_mode, None)
 
 
-async def _send(bot, chat_id, text: str, buf, parse_mode, reply_markup) -> None:
+async def _send(bot, chat_id, text: str, buf, parse_mode, reply_markup):
+    """Yuborilgan OXIRGI xabarni qaytaradi (signal matni/tugmasi shu xabarda)."""
     if buf is not None:
         buf.seek(0)
         if len(text) <= CAPTION_LIMIT:
-            await bot.send_photo(chat_id=chat_id, photo=buf, caption=text, parse_mode=parse_mode,
-                                 reply_markup=reply_markup)
-            return
+            return await bot.send_photo(chat_id=chat_id, photo=buf, caption=text, parse_mode=parse_mode,
+                                        reply_markup=reply_markup)
         await bot.send_photo(chat_id=chat_id, photo=buf)
-    await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode,
-                           reply_markup=reply_markup)
+    return await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode,
+                                  reply_markup=reply_markup)
+
+
+async def _track(bot, chat_id, msg, track) -> None:
+    """Signal xabari id sini saqlaydi (keyingi TP/SL xabarlari shunga reply bo'ladi); ixtiyoriy zakrepit."""
+    import config as C
+    from engine import evaluator
+    symbol, tf, sent_ts = track
+    await asyncio.to_thread(evaluator.save_msg, symbol, tf, sent_ts, chat_id, msg.message_id)
+    if C.PIN_ACTIVE_SIGNALS:
+        try:
+            await bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id,
+                                       disable_notification=True)
+        except Exception as e:
+            logger.warning(f"Signalni zakrepit qilib bo'lmadi ({chat_id}): {e}")
 
 
 async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None, parse_mode=None,
-                    reply_markup=None) -> None:
+                    reply_markup=None, track=None) -> None:
+    """track=(symbol, tf, sent_ts) berilsa — xabar id si saqlanadi va notify() shunga reply qiladi."""
     for chat_id in chat_ids:
         try:
-            await send_with_chart(bot, chat_id, text, buf, parse_mode, reply_markup)
+            msg = await send_with_chart(bot, chat_id, text, buf, parse_mode, reply_markup)
         except Exception as e:
             logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
+            continue
+        if track and track[2] and msg is not None:
+            try:
+                await _track(bot, chat_id, msg, track)
+            except Exception as e:
+                logger.warning(f"Signal xabarini kuzatishda xato ({chat_id}): {e}")
+
+
+async def notify(bot, chat_ids: Iterable[int], text: str, symbol: str, tf: str, sent_ts,
+                 parse_mode=None, unpin: bool = False) -> None:
+    """Signal bo'yicha yangilik (TP1/TP2/SL/muddat...) — ASL signal xabariga REPLY qilib yuboradi.
+    Asl xabar topilmasa yoki o'chirilgan bo'lsa — oddiy xabar sifatida boradi."""
+    import config as C
+    from engine import evaluator
+    ids = {}
+    if C.REPLY_TO_SIGNAL and sent_ts:
+        for chat, mid in await asyncio.to_thread(evaluator.get_msgs, symbol, tf, sent_ts):
+            ids[chat] = mid
+    for chat_id in chat_ids:
+        mid = ids.get(chat_id)
+        try:
+            if mid:
+                await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode,
+                                       reply_to_message_id=mid, allow_sending_without_reply=True)
+            else:
+                await bot.send_message(chat_id=chat_id, text=text[:MESSAGE_LIMIT], parse_mode=parse_mode)
+        except Exception as e:
+            logger.error(f"Yangilik yuborishda xato ({chat_id}): {e}")
+        if unpin and mid and C.PIN_ACTIVE_SIGNALS:
+            try:
+                await bot.unpin_chat_message(chat_id=chat_id, message_id=mid)
+            except Exception as e:
+                logger.warning(f"Zakrepni olib bo'lmadi ({chat_id}): {e}")
+
+
+def progress_text(ev: dict, label: str) -> str:
+    """TP1/TP2 olinganda: pozitsiyani qo'lda boshqarish uchun ko'rsatma."""
+    sym, side, st, three = ev["symbol"], ev["side"], ev["stage"], ev["three"]
+    if st == 1:
+        part = "40%" if three else "50%"
+        return (f"🎯 TP1 взят [{label}]\n{sym} {side}: закройте ~{part}, SL перенесите на вход "
+                f"({ev['entry']:.6g})")
+    if not three:
+        return f"🎯🎯 TP2 взят [{label}]\n{sym} {side}: позиция закрыта полностью."
+    return (f"🎯🎯 TP2 взят [{label}]\n{sym} {side}: закройте ещё ~30%, SL перенесите на TP1 "
+            f"({ev['tp1']:.6g}), остаток — к TP3 ({ev['tp3']:.6g})")
+
+
+def result_text(r: dict, label: str) -> str:
+    """Signal yopilganda yakuniy xabar (MFE/MAE bilan)."""
+    extra = ""
+    if r.get("mfe_r") is not None:
+        extra = f"\nMFE {r['mfe_r']:.2f}R · MAE {r['mae_r']:.2f}R"
+    return (f"{RESULT_TEXT.get(r['status'], r['status'])} [{label}]\n"
+            f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R{extra}")
 
 
 async def reply_with_chart(message, text: str, buf, parse_mode=None) -> None:

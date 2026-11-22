@@ -16,7 +16,7 @@ import logging
 import time
 from typing import List, Optional
 
-from config import FEE_PCT, SLIPPAGE_PCT
+from config import FEE_PCT, SLIPPAGE_PCT, STATS_TZ_OFFSET
 from engine import db, sim
 
 logger = logging.getLogger("nozik.evaluator")
@@ -56,19 +56,33 @@ def _init():
                 status TEXT DEFAULT 'open',
                 gross_r DOUBLE PRECISION,
                 result_r DOUBLE PRECISION,
-                closed_ts BIGINT
+                closed_ts BIGINT,
+                mfe_r DOUBLE PRECISION,
+                mae_r DOUBLE PRECISION
             )
         """)
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS signal_msgs (
+                id {db.id_column()},
+                symbol TEXT NOT NULL,
+                tf TEXT NOT NULL,
+                sent_ts BIGINT NOT NULL,
+                chat_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_msgs_sig ON signal_msgs (symbol, tf, sent_ts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_status ON signals (status, tf)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_sym ON signals (symbol, tf, sent_ts)")
-    # eski bazalar uchun migratsiya: tp3 ustuni (alohida tranzaksiya — xato bo'lsa keyingisiga ta'sir qilmasin)
-    try:
-        with db.tx() as conn:
-            conn.execute("ALTER TABLE signals ADD COLUMN IF NOT EXISTS tp3 DOUBLE PRECISION"
-                         if db.BACKEND == "postgres" else
-                         "ALTER TABLE signals ADD COLUMN tp3 DOUBLE PRECISION")
-    except Exception:
-        pass            # ustun allaqachon bor
+    # eski bazalar uchun migratsiya (har ustun alohida tranzaksiyada — xato bo'lsa keyingisiga ta'sir qilmasin)
+    for col in ("tp3", "mfe_r", "mae_r"):
+        try:
+            with db.tx() as conn:
+                conn.execute(f"ALTER TABLE signals ADD COLUMN IF NOT EXISTS {col} DOUBLE PRECISION"
+                             if db.BACKEND == "postgres" else
+                             f"ALTER TABLE signals ADD COLUMN {col} DOUBLE PRECISION")
+        except Exception:
+            pass        # ustun allaqachon bor
 
 
 # ------------------------------------------------------------------ yozish
@@ -84,6 +98,30 @@ def record_signal(sig) -> int:
              sig.rr1, sig.rr2, sent_ts, sig.ts, getattr(sig, "tp3", None)),
         )
     return sent_ts
+
+
+def save_msg(symbol: str, tf: str, sent_ts: int, chat_id: int, message_id: int) -> None:
+    """Yuborilgan signal xabarining Telegram id si — keyingi TP/SL xabarlari shunga reply bo'ladi."""
+    try:
+        with db.tx() as conn:
+            conn.execute(
+                "INSERT INTO signal_msgs (symbol, tf, sent_ts, chat_id, message_id) VALUES (?,?,?,?,?)",
+                (symbol, tf, int(sent_ts), int(chat_id), int(message_id)))
+    except Exception as e:
+        logger.warning(f"signal xabar id sini saqlashda xato: {e}")
+
+
+def get_msgs(symbol: str, tf: str, sent_ts: int) -> list:
+    """[(chat_id, message_id), ...] — shu signal yuborilgan xabarlar."""
+    try:
+        with db.tx() as conn:
+            rows = conn.execute(
+                "SELECT chat_id, message_id FROM signal_msgs WHERE symbol=? AND tf=? AND sent_ts=? "
+                "ORDER BY id", (symbol, tf, int(sent_ts))).fetchall()
+        return [(int(c), int(m)) for c, m in rows]
+    except Exception as e:
+        logger.warning(f"signal xabar id sini o'qishda xato: {e}")
+        return []
 
 
 def recently_signaled(symbol: str, tf: str, cooldown_sec: int) -> bool:
@@ -102,18 +140,20 @@ def recently_signaled(symbol: str, tf: str, cooldown_sec: int) -> bool:
 
 # --------------------------------------------------------------- baholash
 def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int,
-                     events: Optional[list] = None) -> List[dict]:
+                     events: Optional[list] = None, stale_candles: int = 0,
+                     stale_min_mfe: float = 0.5) -> List[dict]:
     """Shu taymfreymdagi ochiq signallarni yangi YOPILGAN shamlar bilan tekshiradi.
     Yangi yopilganlar ro'yxatini qaytaradi. `events` berilsa — oraliq bosqichlar (TP1/TP2 olindi,
     pozitsiya hali ochiq) ham shu ro'yxatga qo'shiladi: {"symbol","side","stage","three","tp"...}."""
     with db.tx() as conn:
         rows = conn.execute(
-            "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit, tp3 "
-            "FROM signals WHERE status='open' AND tf=?", (tf,)
+            "SELECT id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked_ts, candles_n, tp1_hit, tp3, "
+            "sent_ts, mfe_r, mae_r FROM signals WHERE status='open' AND tf=?", (tf,)
         ).fetchall()
 
     closed = []
-    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked, n, hit1, tp3) in rows:
+    for (row_id, symbol, side, entry, sl, tp1, tp2, rr1, rr2, checked, n, hit1, tp3,
+         sent_ts, mfe, mae) in rows:
         try:
             c = get_klines_fn(symbol, interval, 200)   # tarmoq — tranzaksiyadan TASHQARIDA
             if not c:
@@ -124,12 +164,19 @@ def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int,
             hit1 = stage0 if three else bool(hit1)
             status: Optional[str] = None
             gross: Optional[float] = None
+            risk = abs(entry - sl)
+            long_ = side == "LONG"
+            mfe = float(mfe or 0.0)
+            mae = float(mae or 0.0)
 
             for x in c:
                 if x[0] <= checked:
                     continue
                 checked = x[0]
                 n += 1
+                if risk > 0:                            # MFE/MAE: eng ko'p foyda / eng ko'p qarshi harakat (R)
+                    mfe = max(mfe, ((x[2] - entry) if long_ else (entry - x[3])) / risk)
+                    mae = max(mae, ((entry - x[3]) if long_ else (x[2] - entry)) / risk)
                 if three:
                     rr3 = abs(tp3 - entry) / abs(entry - sl) if entry != sl else 3.0
                     hit1, status, gross = sim.step3(side, entry, sl, tp1, tp2, tp3, rr1, rr2, rr3,
@@ -144,20 +191,27 @@ def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int,
                     gross = (sim.expire_gross3(side, entry, sl, rr1, rr2, hit1, x[4]) if three
                              else sim.expire_gross(side, entry, sl, rr1, hit1, x[4]))
                     break
+                if stale_candles and n >= stale_candles and not hit1 and mfe < stale_min_mfe:
+                    status = "stale"                    # impuls so'ndi: TP1 yo'q, narx kutilgan tomonga yurmadi
+                    gross = sim.expire_gross(side, entry, sl, rr1, False, x[4])
+                    break
 
             if status:
                 net = gross - sim.cost_r(entry, sl, FEE_PCT, SLIPPAGE_PCT)
                 upd = ("UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=?, status=?, "
-                       "gross_r=?, result_r=?, closed_ts=? WHERE id=? AND status='open'")
-                args = (checked, n, int(hit1), status, gross, net, int(time.time()), row_id)
+                       "gross_r=?, result_r=?, closed_ts=?, mfe_r=?, mae_r=? WHERE id=? AND status='open'")
+                args = (checked, n, int(hit1), status, gross, net, int(time.time()), mfe, mae, row_id)
                 closed.append({"symbol": symbol, "tf": tf, "side": side, "status": status,
-                               "gross_r": gross, "result_r": net})
+                               "gross_r": gross, "result_r": net, "sent_ts": sent_ts,
+                               "mfe_r": mfe, "mae_r": mae})
             else:
-                upd = "UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=? WHERE id=? AND status='open'"
-                args = (checked, n, int(hit1), row_id)
+                upd = ("UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=?, mfe_r=?, mae_r=? "
+                       "WHERE id=? AND status='open'")
+                args = (checked, n, int(hit1), mfe, mae, row_id)
                 if events is not None and int(hit1) > stage0:       # yangi bosqich: TP1 yoki TP2 olindi
-                    events.append({"symbol": symbol, "side": side, "stage": int(hit1), "three": three,
-                                   "tp1": tp1, "tp2": tp2, "tp3": tp3, "entry": entry})
+                    events.append({"symbol": symbol, "tf": tf, "side": side, "stage": int(hit1),
+                                   "three": three, "tp1": tp1, "tp2": tp2, "tp3": tp3, "entry": entry,
+                                   "sent_ts": sent_ts})
             with db.tx() as conn:
                 conn.execute(upd, args)
         except Exception as e:
@@ -225,3 +279,75 @@ def get_stats_since(seconds_ago: int, tf: Optional[str] = None,
     out = _summary(rows)
     out["total_sent"] = total_sent
     return out
+
+
+# ------------------------------------------------------- batafsil tahlil (v6.5)
+def _grp(rows) -> str:
+    n = len(rows)
+    vals = [r[4] for r in rows]
+    wins = sum(1 for v in vals if v > 0)
+    return f"{n} сд · {wins / n * 100:.0f}% · {sum(vals):+.1f}R (ср. {sum(vals) / n:+.2f}R)"
+
+
+def breakdown_text(tf: str) -> str:
+    """Yopilgan signallar bo'yicha: soat, ball, yo'nalish, MFE/MAE. Matn (Russian — bot tili)."""
+    with db.tx() as conn:
+        rows = conn.execute(
+            "SELECT sent_ts, score, side, status, result_r, mfe_r, mae_r FROM signals "
+            "WHERE tf=? AND status!='open' AND result_r IS NOT NULL", (tf,)).fetchall()
+    n = len(rows)
+    if n < 5:
+        return f"Пока мало закрытых сделок ({n}) — подробный разбор появится после 5+."
+
+    out = [f"🔬 Разбор {n} закрытых сделок (после издержек)", ""]
+
+    def block(title, keyf, order):
+        groups = {}
+        for r in rows:
+            groups.setdefault(keyf(r), []).append(r)
+        lines = [title]
+        for k in order:
+            if k in groups:
+                lines.append(f"• {k}: {_grp(groups[k])}")
+        out.extend(lines + [""])
+
+    tz = STATS_TZ_OFFSET
+
+    def hour_block(r):
+        h = (int(r[0]) // 3600 + tz) % 24
+        a = h // 6 * 6
+        return f"{a:02d}–{a + 6:02d}ч"
+    block(f"🕒 По времени (UTC{tz:+d})", hour_block, ["00–06ч", "06–12ч", "12–18ч", "18–24ч"])
+
+    def score_block(r):
+        s = r[1]
+        return "90+" if s >= 90 else ("80–89" if s >= 80 else ("70–79" if s >= 70 else "<70"))
+    block("⭐ По баллу", score_block, ["<70", "70–79", "80–89", "90+"])
+    block("↕️ По стороне", lambda r: r[2], ["LONG", "SHORT"])
+
+    with_mfe = [r for r in rows if r[5] is not None]
+    if with_mfe:
+        def avg(xs):
+            return sum(xs) / len(xs) if xs else 0.0
+        lines = [f"📏 MFE/MAE ({len(with_mfe)} сд.)"]
+        exp = [r for r in with_mfe if r[3] in ("expired", "stale")]
+        if exp:
+            weak = sum(1 for r in exp if r[5] < 0.5)
+            lines.append(f"• Истёк/затух: {len(exp)} · ср. MFE {avg([r[5] for r in exp]):.2f}R · "
+                         f"не дошли до +0.5R: {weak}/{len(exp)} · ср. итог {avg([r[4] for r in exp]):+.2f}R")
+        win = [r for r in with_mfe if r[3] in ("tp2", "tp3", "lock", "be")]
+        if win:
+            lines.append(f"• Прибыльные: {len(win)} · ср. MFE {avg([r[5] for r in win]):.2f}R "
+                         f"vs взято {avg([r[4] for r in win]):+.2f}R")
+        sl = [r for r in with_mfe if r[3] == "sl"]
+        if sl:
+            up = sum(1 for r in sl if r[5] >= 0.5)
+            lines.append(f"• SL: {len(sl)} · из них сначала шли в плюс ≥0.5R: {up}/{len(sl)} · "
+                         f"ср. MFE {avg([r[5] for r in sl]):.2f}R")
+        out.extend(lines + [""])
+    else:
+        out.append("📏 MFE/MAE: данные начнут копиться с новых сделок.\n")
+
+    if n < 30:
+        out.append("⚠️ Выборка мала — это ориентир, не вывод.")
+    return "\n".join(out)
