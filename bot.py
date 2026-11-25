@@ -18,15 +18,13 @@ import config as C
 from config import (
     TELEGRAM_BOT_TOKEN,
     ADMIN_CHAT_IDS,
-    SCAN_INTERVAL_SECONDS,
-    USE_BTC_FILTER,
     EVAL_CHECK_INTERVAL_SECONDS,
     DAILY_REPORT_HOUR_UTC,
     WEEKLY_REPORT_WEEKDAY,
     SELF_PING_INTERVAL_SECONDS,
     PORT,
 )
-from engine import db, tg
+from engine import db, tg, runtime_settings
 from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats, get_stats_since
 from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals import amd_volume as amd
@@ -76,7 +74,7 @@ async def _run_scan(bot, force: bool = False):
         sigs = await asyncio.to_thread(lambda: amd.scan(force=force))
 
         regime = "neutral"
-        if USE_BTC_FILTER and sigs:
+        if C.USE_BTC_FILTER and sigs:
             try:
                 regime = await asyncio.to_thread(get_btc_regime)
             except Exception:
@@ -85,7 +83,7 @@ async def _run_scan(bot, force: bool = False):
         sent = skipped = 0
         for s in sigs:
             # BTC kuchli oqimiga qarshi altcoin signali ishonchsiz
-            if USE_BTC_FILTER and conflicts_with_btc_regime(s.symbol, s.side, regime):
+            if C.USE_BTC_FILTER and conflicts_with_btc_regime(s.symbol, s.side, regime):
                 logger.info(f"{s.symbol}: signal ({s.side}) BTC rejimiga ({regime}) zid - o'tkazib yuborildi")
                 skipped += 1
                 continue
@@ -130,6 +128,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/pd_detail — разбор pump/dump: время, балл, MFE/MAE\n"
         "/report — отчёт за 24 часа и 7 дней\n"
         "/settings — текущие настройки\n"
+        "/params — изменить параметры бота (кнопками)\n"
+        "/set ИМЯ ЗНАЧЕНИЕ — быстро изменить параметр\n"
         "/myid — ваш Telegram ID",
         reply_markup=MAIN_MENU,
     )
@@ -286,22 +286,24 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Макс. риск: {CFG['max_risk_pct']}%\n"
         f"Фильтр рынка: оборот за 24ч {CFG['min_turnover']/1e6:g}M — {CFG['max_turnover']/1e6:g}M USDT "
         f"(макс. {CFG['max_symbols']} пар)\n"
-        f"Сканирование 15m: каждые {SCAN_INTERVAL_SECONDS // 60} мин (по новой свече)\n"
+        f"Сканирование 15m: каждые {C.SCAN_INTERVAL_SECONDS // 60} мин (по новой свече)\n"
         f"Cooldown: {CFG['cooldown_sec'] // 3600} ч\n"
-        f"BTC-фильтр: {'включён' if USE_BTC_FILTER else 'выключен'}\n"
+        f"BTC-фильтр: {'включён' if C.USE_BTC_FILTER else 'выключен'}\n"
         f"Не догонять цену: макс. {CFG['max_chase_r']}R от входа\n"
         f"Издержки: комиссия {CFG['fee_pct']}% + проскальзывание {CFG['slip_pct']}% за сторону\n"
         f"Срок сигнала 15m: {CFG['expire_candles'] * 15 // 60} ч\n"
         f"База данных: {db.BACKEND}\n"
         f"Пользователей с доступом: {len(ADMIN_CHAT_IDS)}\n\n"
         + pump_detector.settings_text() + "\n"
-        "Изменить: Render → Environment Variables."
+        "Изменить параметры: /params (кнопки) или /set ИМЯ ЗНАЧЕНИЕ"
     )
     await update.message.reply_text(text)
 
 
 async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
+        return
+    if await runtime_settings.handle_text(update, context):
         return
     text = update.message.text
 
@@ -427,6 +429,9 @@ async def _post_init(app: Application):
         BotCommand("pump_stats", "Статистика сигналов 15m"),
         BotCommand("report", "Отчёт за 24ч / 7 дней"),
         BotCommand("settings", "Текущие настройки"),
+        BotCommand("params", "Изменить параметры бота"),
+        BotCommand("set", "Быстро: /set ИМЯ ЗНАЧЕНИЕ"),
+        BotCommand("reset_param", "Сбросить параметр / all"),
         BotCommand("swing", "Проверить рынок (1h и 4h)"),
         BotCommand("swing_check", "1h/4h: один токен"),
         BotCommand("swing_backtest", "1h/4h: бэктест"),
@@ -453,6 +458,7 @@ def main():
         )
 
     init_db()
+    runtime_settings.init()   # v6.7: Telegram'dan saqlangan parametrlarni qo'llash (job'lardan OLDIN)
     if db.BACKEND != "postgres" and os.environ.get("RENDER"):
         logger.warning("SQLite + Render: statistika va cooldown har deploy'da o'chadi. "
                        "DATABASE_URL (PostgreSQL) o'rnating.")
@@ -472,13 +478,14 @@ def main():
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_text))
 
+    runtime_settings.register(app)  # /params, /set, /reset_param
     amd_swing.register(app)  # 1h (trend 4h) va 4h (trend 1d) AMD moduli
     pump_detector.register(app)  # pump/dump detektori (AMD'dan alohida)
 
     # Скан выравнивается по часам: :00, :05, :10 ... (+15 с после закрытия свечи).
     # Bir xil yopilgan sham qayta tahlil qilinmaydi (amd.scan ichida).
-    first_scan = SCAN_INTERVAL_SECONDS - (time.time() % SCAN_INTERVAL_SECONDS) + 15
-    app.job_queue.run_repeating(background_scan, interval=SCAN_INTERVAL_SECONDS, first=first_scan)
+    first_scan = C.SCAN_INTERVAL_SECONDS - (time.time() % C.SCAN_INTERVAL_SECONDS) + 15
+    app.job_queue.run_repeating(background_scan, interval=C.SCAN_INTERVAL_SECONDS, first=first_scan)
     app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60)
     start_self_ping()
     app.job_queue.run_daily(

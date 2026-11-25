@@ -125,3 +125,7 @@ Avval 1–2 hafta `/pd_stats` ni kuzating, keyin chegaralarni sozlang.
 2. Render → ваш сервис → **Environment** → переменная `ADMIN_CHAT_IDS` — ID через запятую: `123456789,987654321`
 3. **Save Changes** — Render перезапустит бота.
 4. Для канала/группы: добавьте бота администратором и впишите ID канала (`-100...`) в тот же список.
+
+
+## v6.7 — parametrlar Telegram'dan
+`/params` (tugmalar), `/set ИМЯ ЗНАЧЕНИЕ`, `/reset_param ИМЯ|all`. Batafsil: CHANGES.md.

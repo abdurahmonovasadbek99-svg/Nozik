@@ -1,3 +1,18 @@
+# v6.7: parametrlarni Telegram ICHIDAN o'zgartirish (/params, /set)
+
+- **/params** — tugmali menyu: 6 bo'lim, 74 ta parametr (AMD, pump/dump pol, SL/TP/pauza, filtrlar, boshqalar).
+  Parametrni bosing: ➖/➕ (qadam bilan), ✏️ qiymat kiritish, 🟢/🔴 yoqish-o'chirish, ♻️ standartga qaytarish.
+- **/set ИМЯ ЗНАЧЕНИЕ** — tez o'zgartirish: `/set PUMP_MIN_SCORE 75`, `/set PUMP_STRICT off`, `/set MIN_24H_TURNOVER_USDT 300k` (k/m qo'llanadi).
+- **/reset_param ИМЯ** yoki `/reset_param all` — standartga qaytarish.
+- O'zgarish DARHOL ishlaydi (redeploy ham, Render ham kerak emas). Skan intervallari (`SCAN_INTERVAL_SECONDS`, `PUMP_SCAN_INTERVAL_SECONDS`) job'ni qayta rejalashtiradi.
+- Qiymatlar bazadagi `runtime_settings` jadvaliga yoziladi va qayta ishga tushganda qaytadan qo'llanadi. Baza qiymati Render env'dan USTUN.
+  **DIQQAT:** `DATABASE_URL` (PostgreSQL) bo'lmasa SQLite har redeploy'da o'chadi — sozlamalar ham.
+- Tekshiruvlar: diapazon, tur (int/float/bool), juftliklar (min < max oborot, corr past < yuqori, stakan yomon < yaxshi).
+- `USE_PUMP_DETECTOR` endi jonli: o'chirilsa skan to'xtaydi (ochiq signallar kuzatuvi davom etadi), yoqilsa darhol ishlaydi.
+- Ichki: `bot.py` va `engine/evaluator.py` config qiymatlarini endi `C.NOM` orqali jonli o'qiydi; AMD profillari (`amd_volume.CFG`, `amd_swing.PROFILES`) sinxronlanadi.
+- Faqat adminlar. Maxfiy/infratuzilma kalitlari (TOKEN, ADMIN_CHAT_IDS, DATABASE_URL, PORT, WEBAPP_URL) Telegram'dan o'zgarmaydi.
+- Test: sintetik (qiymat qo'llanishi, bazadan tiklanish, tekshiruvlar, matn kiritish). Haqiqiy Telegram tugmalari serverda sinab ko'rilmagan.
+
 # v6.6: pump trend filtri teshiklari yopildi
 
 - 1h trendga qarshi signal endi har doim bloklanadi (`PUMP_ALLOW_REVERSAL=0`), trend chizig'i buzilsa ham.
