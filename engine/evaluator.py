@@ -16,7 +16,7 @@ import logging
 import time
 from typing import List, Optional
 
-from config import FEE_PCT, SLIPPAGE_PCT, STATS_TZ_OFFSET
+import config as C
 from engine import db, sim
 
 logger = logging.getLogger("nozik.evaluator")
@@ -197,7 +197,7 @@ def evaluate_pending(get_klines_fn, tf: str, interval: str, expire_candles: int,
                     break
 
             if status:
-                net = gross - sim.cost_r(entry, sl, FEE_PCT, SLIPPAGE_PCT)
+                net = gross - sim.cost_r(entry, sl, C.FEE_PCT, C.SLIPPAGE_PCT)
                 upd = ("UPDATE signals SET checked_ts=?, candles_n=?, tp1_hit=?, status=?, "
                        "gross_r=?, result_r=?, closed_ts=?, mfe_r=?, mae_r=? WHERE id=? AND status='open'")
                 args = (checked, n, int(hit1), status, gross, net, int(time.time()), mfe, mae, row_id)
@@ -311,7 +311,7 @@ def breakdown_text(tf: str) -> str:
                 lines.append(f"• {k}: {_grp(groups[k])}")
         out.extend(lines + [""])
 
-    tz = STATS_TZ_OFFSET
+    tz = C.STATS_TZ_OFFSET
 
     def hour_block(r):
         h = (int(r[0]) // 3600 + tz) % 24
