@@ -79,8 +79,8 @@ PUMP_STRICT = os.environ.get("PUMP_STRICT", "1") == "1"       # qat'iy rejim: fa
 PUMP_BREAKOUT_HOURS = _i("PUMP_BREAKOUT_HOURS", "6")          # shuncha soatlik diapazon chegarasi buzilishi kerak
 # --- v6.2: sifat filtrlari (SL urilish ulushini kamaytirish) ---
 PUMP_TREND_FILTER = os.environ.get("PUMP_TREND_FILTER", "1") == "1"   # 1h EMA + trend chizig'iga qarshi signal yo'q
-PUMP_MIN_PULLBACK = _f("PUMP_MIN_PULLBACK", "0.10")   # impulsda kamida shuncha ulush orqaga qaytish bo'lishi kerak (0 = o'chiq). Vertikal "blow-off" cho'qqiga kirmaslik
-PUMP_SL_ATR = _f("PUMP_SL_ATR", "0.5")                # SL ni 1m ATR ning shuncha ulushiga kengaytirish (stop-hunt shovqini)
+PUMP_MIN_PULLBACK = _f("PUMP_MIN_PULLBACK", "0.25")   # impulsda kamida shuncha ulush orqaga qaytish bo'lishi kerak (0 = o'chiq). Vertikal "blow-off" cho'qqiga kirmaslik
+PUMP_SL_ATR = _f("PUMP_SL_ATR", "1.0")                # SL ni 1m ATR ning shuncha ulushiga kengaytirish (stop-hunt shovqini)
 PUMP_MAX_COST_R = _f("PUMP_MAX_COST_R", "0.12")       # komissiya+slippage shu R dan oshsa signal yo'q (risk juda kichik)
 PUMP_BTC_PENALTY = _i("PUMP_BTC_PENALTY", "15")       # BTC rejimiga qarshi signal ballidan ayriladigan
 PUMP_SL_COOLDOWN_SECONDS = _i("PUMP_SL_COOLDOWN_SECONDS", "7200")  # SL urgan coin+yo'nalishga qayta kirmaslik
@@ -147,6 +147,11 @@ SELF_PING_INTERVAL_SECONDS = _i("SELF_PING_INTERVAL_SECONDS", "240")
 WEBAPP_URL = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")).rstrip("/")
 USE_WEBAPP = os.environ.get("USE_WEBAPP", "1") == "1" and WEBAPP_URL.startswith("https://")
 
+
+# --- v6.6: trend filtri teshiklarini yopish ---
+PUMP_REQUIRE_TREND_DATA = os.environ.get("PUMP_REQUIRE_TREND_DATA", "1") == "1"   # 1h ma'lumot yetarli bo'lmasa (yangi coin) — signal yo'q
+PUMP_ALLOW_REVERSAL = os.environ.get("PUMP_ALLOW_REVERSAL", "0") == "1"           # 0 = 1h EMA trendiga qarshi signal HAR DOIM bloklanadi (chiziq buzilsa ham)
+PUMP_LINE_BUFFER = _f("PUMP_LINE_BUFFER", "0.01")                                 # trend chizig'i buzilishi bufer (0.01 = 1%)
 
 # --- v6.5: signalga bog'lab yuborish, MFE/MAE, erta chiqish, SL-pauza ---
 REPLY_TO_SIGNAL = os.environ.get("REPLY_TO_SIGNAL", "1") == "1"        # TP/SL/o'zgarish xabarlari asl signalga reply bo'lib boradi

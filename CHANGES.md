@@ -1,3 +1,11 @@
+# v6.6: pump trend filtri teshiklari yopildi
+
+- 1h trendga qarshi signal endi har doim bloklanadi (`PUMP_ALLOW_REVERSAL=0`), trend chizig'i buzilsa ham.
+- 1h ma'lumot yetarli bo'lmasa (yangi listing, <55 sham) signal yo'q (`PUMP_REQUIRE_TREND_DATA=1`).
+- Trend chizig'i buzilish buferi 0.3% -> 1% (`PUMP_LINE_BUFFER`).
+- `PUMP_MIN_PULLBACK` 0.10 -> 0.25 (cho'qqiga kirmaslik), `PUMP_SL_ATR` 0.5 -> 1.0 (kengroq SL).
+- Diqqat: serverda shu nomli env o'zgaruvchilar o'rnatilgan bo'lsa, ular standartni bosib o'tadi.
+
 # v6.5: signalga bog'langan yangiliklar + MFE/MAE + tahlil + erta chiqish + SL-pauza
 
 1. **Yangiliklar asl signalga REPLY bo'lib boradi** (`REPLY_TO_SIGNAL=1`): TP1/TP2 olindi ("SL ni suring"), SL, muddat tugadi,
