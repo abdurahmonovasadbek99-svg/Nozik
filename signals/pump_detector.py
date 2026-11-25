@@ -310,7 +310,7 @@ def trend_ctx(c1h: Optional[list], price: float, up: bool) -> Optional[dict]:
         if descending_ok:
             n_now = len(c)                                   # hozirgi (shakllanayotgan) shamning indeksi
             line = v2 + (v2 - v1) / (i2 - i1) * (n_now - i2)
-            buf = 0.003                                      # 0.3% bufer
+            buf = C.PUMP_LINE_BUFFER                         # v6.6: 1% bufer
             broken = price > line * (1 + buf) if up else price < line * (1 - buf)
     return {"trend": trend, "gap": gap, "against": against, "line": line, "broken": broken}
 
@@ -490,8 +490,12 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
 
     # --- 1h trend / trend chizig'i: trendga qarshi pump/dump — ko'pincha "dead cat bounce" (SL shundan)
     tc = trend_ctx(c1h, price, up) if (C.PUMP_TREND_FILTER and c1h) else None
+    if C.PUMP_TREND_FILTER and C.PUMP_REQUIRE_TREND_DATA and not tc:
+        return {"alert": None, "reject": "нет данных 1ч для проверки тренда (новый коин)", "m": m}
     if tc:
         m.update(trend=tc["trend"], line_broken=tc["broken"])
+        if tc["against"] and not C.PUMP_ALLOW_REVERSAL:
+            return {"alert": None, "reject": f"против 1ч тренда (EMA20/50 {tc['gap']:+.1f}%) — развороты отключены", "m": m}
         line_txt = "нисходящей" if up else "восходящей"
         if tc["line"] is not None and tc["broken"] is False:
             return {"alert": None, "reject": f"против 1ч тренда: цена не пробила {line_txt} линию тренда", "m": m}
