@@ -1101,7 +1101,7 @@ async def _run(bot) -> int:
 
 
 async def _job_scan(context):
-    if _lock.locked():
+    if not C.USE_PUMP_DETECTOR or _lock.locked():
         return
     try:
         await _run(context.bot)
@@ -1115,7 +1115,7 @@ def _progress_text(ev: dict) -> str:
 
 
 async def _job_eval(context):
-    events: list = []
+    events: list = []   # (o'chiq bo'lsa ham ochiq signallar kuzatuvi davom etadi)
     try:
         closed = await asyncio.to_thread(
             evaluate_pending, A.bybit_klines, TF, EVAL_INTERVAL, C.PUMP_EXPIRE_CANDLES, events,
@@ -1258,8 +1258,7 @@ def register(app):
     app.add_handler(CommandHandler("pd_detail", cmd_pd_detail))
     app.add_handler(CommandHandler("pd_backtest", cmd_pd_backtest))
     if not C.USE_PUMP_DETECTOR:
-        logger.info("Pump detektori o'chirilgan (USE_PUMP_DETECTOR=0)")
-        return
+        logger.info("Pump detektori hozir o'chirilgan (/params orqali yoqish mumkin)")
     interval = max(30, C.PUMP_SCAN_INTERVAL_SECONDS)
     first = interval - (time.time() % interval) + 5
     app.job_queue.run_repeating(_job_scan, interval=interval, first=first)
