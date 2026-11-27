@@ -29,6 +29,8 @@ from engine.evaluator import init_db, record_signal, evaluate_pending, get_stats
 from engine.volatility import get_btc_regime, conflicts_with_btc_regime
 from signals import amd_volume as amd
 from signals.amd_volume import CFG, bybit_klines, check
+from engine.market_ctx import enrich_signal
+from engine import features
 from keepalive import start_self_ping
 from signals import amd_swing, pump_detector
 
@@ -87,7 +89,11 @@ async def _run_scan(bot, force: bool = False):
                 logger.info(f"{s.symbol}: signal ({s.side}) BTC rejimiga ({regime}) zid - o'tkazib yuborildi")
                 skipped += 1
                 continue
+            if not await asyncio.to_thread(enrich_signal, s, CFG["min_score"]):   # v6.9: OI/funding/L-S/taker
+                skipped += 1
+                continue
             s.sent_ts = await asyncio.to_thread(record_signal, s)   # cooldown faqat YUBORILGAN signaldan boshlanadi
+            await asyncio.to_thread(features.record, s)               # v7.0
             await _send_signal(bot, s)
             sent += 1
         return sent, skipped, len(sigs)
@@ -103,35 +109,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     await update.message.reply_text(
-        "🤖 Nozik Bot v4 запущен.\n\n"
-        "Стратегия: AMD (Accumulation → Manipulation → Distribution) + MSS/FVG + "
-        "объёмы Bybit/Binance. Основной фокус — малокапитализированные токены.\n\n"
-        "Сигналы по трём уровням:\n"
-        "• 15m (тренд-фильтр 1h)\n"
-        "• 1h (тренд-фильтр 4h)\n"
-        "• 4h (тренд-фильтр 1d)\n\n"
-        "Команды:\n"
-        "/scan — проверить рынок (15m)\n"
-        "/swing — проверить рынок (1h и 4h)\n"
-        "/check <SYMBOL> — один токен, 15m (например /check PEPEUSDT)\n"
-        "/swing_check <SYMBOL> 1h|4h — один токен, 1h/4h\n"
-        "/backtest <SYMBOL> — бэктест 15m (с комиссиями)\n"
-        "/backtest_top — бэктест 15m по топ-токенам (надёжнее)\n"
-        "/swing_backtest <SYMBOL> 1h|4h — бэктест 1h/4h\n"
-        "/swing_backtest_top 1h|4h — бэктест 1h/4h по топ-токенам\n"
-        "/pump_stats — статистика 15m\n"
-        "/swing_stats — статистика 1h/4h\n"
-        "/pd_scan — проверить резкие движения (pump/dump)\n"
-        "/pd_check <SYMBOL> — pump/dump-статус одной монеты\n"
-        "/pd_stats — статистика детектора pump/dump\n"
-        "/pd_backtest [SYMBOL] — бэктест pump/dump\n"
-        "/pd_detail — разбор pump/dump: время, балл, MFE/MAE\n"
-        "/report — отчёт за 24 часа и 7 дней\n"
-        "/settings — текущие настройки\n"
-        "/params — изменить параметры бота (кнопками)\n"
-        "/set ИМЯ ЗНАЧЕНИЕ — быстро изменить параметр\n"
-        "/myid — ваш Telegram ID",
-        reply_markup=MAIN_MENU,
+        "🤖 <b>Nozik</b> · v7.0\n"
+        "AMD 15m/1h/4h + Pump/Dump детектор\n\n"
+        "🔍 /scan · /swing · /pd_scan — проверить рынок\n"
+        "🎯 /check SYMBOL — разбор монеты\n"
+        "📊 /report · /pd_stats — статистика\n"
+        "⚙️ /params — параметры кнопками\n\n"
+        "Сигнал приходит с графиком; подсказки по SL/TP и итог — ответом на него (сигнал закреплён).",
+        reply_markup=MAIN_MENU, parse_mode="HTML",
     )
 
 
@@ -272,32 +257,30 @@ async def cmd_pump_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+def amd_volume_last() -> str:
+    from signals.amd_volume import LAST_SCAN
+    d = LAST_SCAN.get('dur')
+    return f"{d} с ({LAST_SCAN.get('count', 0)} монет, {LAST_SCAN.get('tf', '15m')})" if d else "—"
+
+
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_admin(update):
         return
     text = (
-        "⚙️ Текущие настройки:\n\n"
-        "Стратегия: AMD + MSS/FVG + объёмы Bybit/Binance\n"
-        "Таймфрейм 15m: тренд-фильтр 1h\n"
-        f"Таймфреймы {', '.join(amd_swing.ENABLED)}: тренд-фильтр "
-        f"{', '.join(amd_swing.PROFILES[t]['htf_label'] for t in amd_swing.ENABLED)}\n"
-        f"Минимальный скор: {CFG['min_score']}/100\n"
-        f"MSS/FVG обязательны: {'да' if CFG['require_structure'] else 'нет (только скор)'}\n"
-        f"Макс. риск: {CFG['max_risk_pct']}%\n"
-        f"Фильтр рынка: оборот за 24ч {CFG['min_turnover']/1e6:g}M — {CFG['max_turnover']/1e6:g}M USDT "
-        f"(макс. {CFG['max_symbols']} пар)\n"
-        f"Сканирование 15m: каждые {C.SCAN_INTERVAL_SECONDS // 60} мин (по новой свече)\n"
-        f"Cooldown: {CFG['cooldown_sec'] // 3600} ч\n"
-        f"BTC-фильтр: {'включён' if C.USE_BTC_FILTER else 'выключен'}\n"
-        f"Не догонять цену: макс. {CFG['max_chase_r']}R от входа\n"
-        f"Издержки: комиссия {CFG['fee_pct']}% + проскальзывание {CFG['slip_pct']}% за сторону\n"
-        f"Срок сигнала 15m: {CFG['expire_candles'] * 15 // 60} ч\n"
-        f"База данных: {db.BACKEND}\n"
-        f"Пользователей с доступом: {len(ADMIN_CHAT_IDS)}\n\n"
+        "⚙️ <b>Настройки</b>\n\n"
+        f"📈 AMD: скор ≥{CFG['min_score']} · риск ≤{CFG['max_risk_pct']}% · "
+        f"оборот {CFG['min_turnover']/1e6:g}–{CFG['max_turnover']/1e6:g}M · "
+        f"скан {C.SCAN_INTERVAL_SECONDS // 60} мин\n"
+        f"🕐 Тренд: 15m→1h · "
+        + " · ".join(f"{t}→{amd_swing.PROFILES[t]['htf_label']}" for t in amd_swing.ENABLED) + "\n"
+        f"⏱ Скорость: AMD-скан {amd_volume_last()}; pump-скан {pump_detector.STATE.get('last_dur', '—')} с · потоков {C.SCAN_WORKERS}/{C.PUMP_WORKERS}\n"
+        f"🛡 BTC-фильтр: {'да' if C.USE_BTC_FILTER else 'нет'} · cooldown {CFG['cooldown_sec'] // 3600} ч\n"
+        f"💸 Издержки: {CFG['fee_pct']}% + {CFG['slip_pct']}% за сторону\n\n"
         + pump_detector.settings_text() + "\n"
-        "Изменить параметры: /params (кнопки) или /set ИМЯ ЗНАЧЕНИЕ"
+        f"🗄 {db.BACKEND} · доступ: {len(ADMIN_CHAT_IDS)}\n"
+        "Изменить: /params или /set ИМЯ ЗНАЧЕНИЕ"
     )
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -420,33 +403,23 @@ def run_health_server():
 
 
 async def _post_init(app: Application):
+    if C.USE_LIQ_STREAM:                       # v6.9: likvidatsiya oqimi (fon vazifa)
+        from engine import liq
+        app.bot_data["liq_task"] = asyncio.create_task(liq.run())
     await app.bot.set_my_commands([
-        BotCommand("start", "Запуск / меню"),
-        BotCommand("scan", "Проверить рынок (15m)"),
-        BotCommand("check", "Проверить один токен"),
-        BotCommand("backtest", "Бэктест (15m)"),
-        BotCommand("backtest_top", "Бэктест 15m по топ-токенам"),
-        BotCommand("pump_stats", "Статистика сигналов 15m"),
-        BotCommand("report", "Отчёт за 24ч / 7 дней"),
+        BotCommand("scan", "Скан рынка (AMD 15m)"),
+        BotCommand("swing", "Скан 1h/4h"),
+        BotCommand("pd_scan", "Скан Pump/Dump"),
+        BotCommand("check", "Разбор одной монеты"),
+        BotCommand("report", "Отчёт 24ч / 7 дней"),
+        BotCommand("pd_stats", "Статистика Pump/Dump"),
+        BotCommand("features", "Что реально работает (по сделкам)"),
+        BotCommand("params", "Параметры кнопками"),
         BotCommand("settings", "Текущие настройки"),
-        BotCommand("params", "Изменить параметры бота"),
-        BotCommand("set", "Быстро: /set ИМЯ ЗНАЧЕНИЕ"),
-        BotCommand("reset_param", "Сбросить параметр / all"),
-        BotCommand("swing", "Проверить рынок (1h и 4h)"),
-        BotCommand("swing_check", "1h/4h: один токен"),
-        BotCommand("swing_backtest", "1h/4h: бэктест"),
-        BotCommand("swing_backtest_top", "1h/4h: бэктест по топ-токенам"),
-        BotCommand("swing_stats", "Статистика 1h/4h"),
-        BotCommand("pd_scan", "Pump/Dump: проверить сейчас"),
-        BotCommand("pd_check", "Pump/Dump: одна монета"),
-        BotCommand("pd_stats", "Статистика pump/dump"),
-        BotCommand("pd_backtest", "Бэктест pump/dump"),
-        BotCommand("pd_detail", "Разбор pump/dump: время, балл, MFE/MAE"),
-        BotCommand("myid", "Ваш Telegram ID"),
     ])
 
 
-CARD_VERSION = "v6.1-RU"
+CARD_VERSION = "v7.0-RU"
 
 
 def main():
@@ -479,6 +452,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_text))
 
     runtime_settings.register(app)  # /params, /set, /reset_param
+    features.register(app)          # v7.0: /features
     amd_swing.register(app)  # 1h (trend 4h) va 4h (trend 1d) AMD moduli
     pump_detector.register(app)  # pump/dump detektori (AMD'dan alohida)
 

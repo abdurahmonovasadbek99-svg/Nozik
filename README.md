@@ -1,4 +1,4 @@
-# Nozik Bot v4 (AMD)
+# Nozik Bot v7.0 (AMD + Pump/Dump)
 
 Bybit USDT-perpetual bozoridagi **kichik tokenlarni** AMD strategiyasi
 (Accumulation → Manipulation → Distribution) + MSS/FVG + Bybit/Binance hajm bo'yicha
@@ -129,3 +129,13 @@ Avval 1–2 hafta `/pd_stats` ni kuzating, keyin chegaralarni sozlang.
 
 ## v6.7 — parametrlar Telegram'dan
 `/params` (tugmalar), `/set ИМЯ ЗНАЧЕНИЕ`, `/reset_param ИМЯ|all`. Batafsil: CHANGES.md.
+
+
+## v6.8 — ixcham kartalar + pump kuchi kuzatuvi
+Signal kartasi ixchamlashdi; ochiq pump/dump signallarida impuls kuchi kuzatilib, SL/TP surish maslahatlari signalga reply (zakrepdagi xabar ostida) keladi. Batafsil: CHANGES.md.
+
+## v6.9 — bozor konteksti
+Taker hajmi, L/S ratio, likvidatsiya oqimi, "OI↑ narx tinch" ogohlantirishi va AMD uchun OI/funding. Batafsil: CHANGES.md.
+
+## v7.0 — tezlik + /features
+Parallel skan (AMD va pump) va signal ko'rsatkichlarini yozib, qaysi filtr ishlashini ko'rsatuvchi /features. Batafsil: CHANGES.md.

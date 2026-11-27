@@ -155,9 +155,44 @@ PUMP_LINE_BUFFER = _f("PUMP_LINE_BUFFER", "0.01")                               
 
 # --- v6.5: signalga bog'lab yuborish, MFE/MAE, erta chiqish, SL-pauza ---
 REPLY_TO_SIGNAL = os.environ.get("REPLY_TO_SIGNAL", "1") == "1"        # TP/SL/o'zgarish xabarlari asl signalga reply bo'lib boradi
-PIN_ACTIVE_SIGNALS = os.environ.get("PIN_ACTIVE_SIGNALS", "0") == "1"  # ochiq signalni "zakrepit" qilish, yopilganda olib tashlash
+PIN_ACTIVE_SIGNALS = os.environ.get("PIN_ACTIVE_SIGNALS", "1") == "1"  # ochiq signalni "zakrepit" qilish, yopilganda olib tashlash
 PUMP_STALE_CANDLES = _i("PUMP_STALE_CANDLES", "0")                    # 5m shamlar; 0 = o'chiq. Masalan 12 = 1 soat
 PUMP_STALE_MIN_MFE_R = _f("PUMP_STALE_MIN_MFE_R", "0.5")              # shu muddatda narx kamida shuncha R ga bormagan bo'lsa - erta chiqish
 PUMP_PAUSE_AFTER_SL = _i("PUMP_PAUSE_AFTER_SL", "3")                  # ketma-ket shuncha SL bo'lsa pump signallari pauza (0 = o'chiq)
 PUMP_PAUSE_SECONDS = _i("PUMP_PAUSE_SECONDS", "3600")
 STATS_TZ_OFFSET = _i("STATS_TZ_OFFSET", "5")                          # soat bo'yicha tahlil uchun (5 = Toshkent)
+
+
+# --- v6.8: pump kuchi kuzatuvi (SL/TP surish maslahatlari) ---
+PUMP_TRAIL = os.environ.get("PUMP_TRAIL", "1") == "1"                  # ochiq signalda kuch o'lchash va SL/TP maslahati
+PUMP_TRAIL_MIN_GAP_SEC = _i("PUMP_TRAIL_MIN_GAP_SEC", "600")           # bir signal bo'yicha maslahatlar orasidagi minimal pauza
+PUMP_TRAIL_MAX_MSGS = _i("PUMP_TRAIL_MAX_MSGS", "6")                   # bir signal uchun maksimal maslahat soni
+PUMP_TRAIL_MIN_R = _f("PUMP_TRAIL_MIN_R", "0.4")                       # kamida shuncha R foyda bo'lgandagina maslahat
+
+# --- v6.9: bozor konteksti (taker hajmi, L/S ratio, likvidatsiyalar, OI/funding) ---
+PUMP_USE_CTX = os.environ.get("PUMP_USE_CTX", "1") == "1"            # yakuniy signal oldidan taker hajmi + L/S ratio (2 ta so'rov)
+PUMP_USE_LIQ = os.environ.get("PUMP_USE_LIQ", "1") == "1"            # likvidatsiya oqimi ballga ta'sir qilsin
+USE_LIQ_STREAM = os.environ.get("USE_LIQ_STREAM", "1") == "1"        # Binance likvidatsiya WebSocket (bitta ulanish; qayta ishga tushganda qo'llanadi)
+PUMP_TAKER_GOOD = _f("PUMP_TAKER_GOOD", "0.58")                      # harakat tomonidagi taker ulushi >= bu: +5
+PUMP_TAKER_BAD = _f("PUMP_TAKER_BAD", "0.45")                        # <= bu: -6
+PUMP_TAKER_REJECT = _f("PUMP_TAKER_REJECT", "0.38")                  # strict rejimda <= bu: signal rad
+PUMP_LS_CROWDED = _f("PUMP_LS_CROWDED", "0.70")                      # akkauntlarning shuncha ulushi harakat tomonida: olomon, -4
+PUMP_LS_FUEL = _f("PUMP_LS_FUEL", "0.40")                            # <= bu: ko'pchilik qarshi tomonda (squeeze yoqilg'isi), +3
+PUMP_LIQ_MIN_USD = _f("PUMP_LIQ_MIN_USD", "25000")                   # likvidatsiya ta'sir qilishi uchun minimal yig'indi (USD)
+PUMP_LIQ_WINDOW_SEC = _i("PUMP_LIQ_WINDOW_SEC", "300")
+# "OI o'syapti, narx tinch" — impuls oldidan ogohlantirish (signal EMAS, SL/TP yo'q)
+PUMP_PRE = os.environ.get("PUMP_PRE", "1") == "1"
+PUMP_PRE_OI_PCT = _f("PUMP_PRE_OI_PCT", "3.0")                       # ~15 daqiqada OI kamida shuncha % o'sdi
+PUMP_PRE_PRICE_PCT = _f("PUMP_PRE_PRICE_PCT", "1.0")                 # ...narx esa 15 daqiqada shundan kam harakat qildi (+-%)
+PUMP_PRE_MIN_OI_USD = _f("PUMP_PRE_MIN_OI_USD", "300000")            # juda kichik OI shovqin beradi
+PUMP_PRE_COOLDOWN_SEC = _i("PUMP_PRE_COOLDOWN_SEC", "7200")
+PUMP_PRE_MAX_PER_HOUR = _i("PUMP_PRE_MAX_PER_HOUR", "4")
+# AMD signallariga OI / funding / L/S / taker konteksti (ballga +-, ko'pi bilan AMD_CTX_MAX_ADJ)
+AMD_USE_CTX = os.environ.get("AMD_USE_CTX", "1") == "1"
+AMD_CTX_MAX_ADJ = _i("AMD_CTX_MAX_ADJ", "10")
+AMD_FUNDING_CROWDED = _f("AMD_FUNDING_CROWDED", "0.10")              # % — signal tomonida funding shundan yuqori: olomon, -5
+AMD_FUNDING_FUEL = _f("AMD_FUNDING_FUEL", "0.05")                    # % — qarshi tomonda shuncha: squeeze yoqilg'isi, +3
+
+# --- v7.0: tezlik (parallel so'rovlar) ---
+SCAN_WORKERS = _i("SCAN_WORKERS", "6")        # AMD skanerida bir vaqtda nechta so'rov (Bybit limiti: 600/5s — 6 ta xavfsiz)
+PUMP_WORKERS = _i("PUMP_WORKERS", "4")        # pump nomzodlarini parallel tekshirish

@@ -1,3 +1,61 @@
+# v7.0: tezlik (parallel so'rovlar) + aniqlikni O'LCHASH (/features)
+
+**Tezlik**
+- AMD skaneri avval ~400 coinni ketma-ket tekshirardi (har biri ~0.3 s -> ~2 daqiqa, 1h/4h/1d bilan ~6 daqiqa). Endi `SCAN_WORKERS` (6) ta
+  parallel oqim. Simulyatsiyada (har so'rov 0.25 s) 120 coin: 44 s -> 7 s (x6). Bitta coin xatosi butun skanni to'xtatmaydi.
+- Pump detektori: nomzodlar `PUMP_WORKERS` (4) oqimda tekshiriladi; to'liq tekshiruv (5m + 1h + BTC, so'ng orderbook + taker + L/S)
+  ~7 ta ketma-ket so'rov o'rniga 2 ta parallel raund. BTC ma'lumoti qulf bilan bir marta yuklanadi. Simulyatsiyada ~1.0 s -> 0.4 s.
+- /settings da oxirgi skan davomiyligi ko'rinadi ("⏱ Скорость").
+- HTTP sessiya ulanish puli 24 gacha (parallel uchun). Bybit limiti 600 so'rov/5 s: 6 oqim ~15-20 so'rov/s — xavfsiz.
+  Render bepul tarifida CPU kam: agar 429/timeout ko'paysa, /params da oqimlarni kamaytiring.
+
+**Aniqlik (o'lchash vositasi)**
+- `engine/features.py`: har signal bilan ko'rsatkichlari (hajm, taker, OI, funding, L/S, MSS/FVG, ...) bazaga yoziladi (`signal_feat` jadvali).
+- **/features [pump|15m|1h|4h|1d]**: yopilgan signallarni ko'rsatkich bo'yicha ikkiga bo'ladi (median yoki ha/yo'q) va win-rate hamda o'rtacha R ni
+  solishtiradi. Qaysi filtr haqiqatan ishlaydi, qaysi biri shovqin — ma'lumot bilan ko'rasiz va chegaralarni /params bilan sozlaysiz.
+  Kamida 20 yopilgan signal kerak; 60 dan kam bo'lsa — ko'rsatma, isbot emas. Ma'lumot v7.0 dan boshlab yig'iladi.
+- /params: SCAN_WORKERS, PUMP_WORKERS.
+- Test: sintetik (soxta tarmoq kechikishi, xato izolyatsiyasi, parallel _full_eval, features tahlili). Jonli Bybit'da o'lchanmagan.
+
+# v6.9: bozor konteksti — taker hajmi, L/S ratio, likvidatsiyalar, "tinch narx" ogohlantirishi, AMD uchun OI/funding
+
+1. **Taker hajmi** (Bybit recent-trade, 1 so'rov, faqat yakuniy pump/dump signal oldidan): oxirgi 5 daqiqada harakat tomonidagi
+   taker ulushi. >=58% +5 ball, <=45% -6 ball; strict rejimda <=`PUMP_TAKER_REJECT` (38%) bo'lsa signal rad etiladi.
+2. **Long/Short account ratio** (Bybit account-ratio, 1 so'rov): olomon harakat tomonida >=70% -4 (olomon), <=40% +3 (squeeze yoqilg'isi).
+3. **Likvidatsiyalar** (`engine/liq.py`): Binance `!forceOrder@arr` — BITTA WebSocket, hamma coin, xotirada 15 daqiqa. Harakatni qo'llagan
+   likvidatsiya >=`PUMP_LIQ_MIN_USD` (25k$) +5, qarshi katta likvidatsiya -5. Ulanish uzilsa/kutubxona yo'q bo'lsa filtr o'tkaziladi.
+   Faqat Binance'da ham ro'yxatda bor coinlar uchun ma'lumot bo'ladi. `requirements.txt` ga `websockets==12.0` qo'shildi.
+4. **"OI o'syapti, narx tinch" ogohlantirishi** (`PUMP_PRE`): ~15 daqiqada OI >=3% o'sib, narx +-1% ichida tursa — "⏳ НАКОПЛЕНИЕ" xabari
+   (yo'nalish uklon: taker + L/S + funding). Bu SIGNAL EMAS: SL/TP yo'q, statistikaga yozilmaydi. Cooldown 2 soat, soatiga <=4 ta.
+5. **AMD signallariga kontekst** (15m, 1h, 4h, 1d; `AMD_USE_CTX`): funding, OI o'zgarishi, L/S, taker -> ball +-(ko'pi bilan `AMD_CTX_MAX_ADJ`=10).
+   Tuzatilgan ball chegaradan past bo'lsa signal yuborilmaydi. Kartada "🧭 funding · OI · L/S · тейкеры" qatori.
+   Likvidatsiya AMD'da ishlatilmaydi (sweep'dan keyingi qaytishda yo'nalishi noaniq).
+6. /params: PUMP_USE_CTX, PUMP_USE_LIQ, PUMP_TAKER_REJECT, PUMP_LIQ_MIN_USD, PUMP_PRE, PUMP_PRE_OI_PCT, PUMP_PRE_PRICE_PCT, AMD_USE_CTX,
+   USE_LIQ_STREAM (qayta ishga tushganda qo'llanadi). /settings da kontekst va likvidatsiya oqimi holati ko'rinadi.
+- So'rovlar: har yakuniy pump signaliga +2, har AMD signaliga +4 (signallar kam), pre-ogohlantirish uchun skanga <=4. Skan siklida qo'shimcha so'rov YO'Q.
+- Test: faqat sintetik (WS soxta kutubxona bilan, ball tuzatishlari, evaluate, pre_scan). Haqiqiy Bybit/Binance'da sinab ko'rilmagan.
+  Ball o'zgarishlari asoslangan taxmin: /pd_stats va /pd_detail da natijani kuzating, kerak bo'lsa /params bilan o'chiring.
+
+# v6.8: ixcham interfeys + pump kuchi kuzatuvi (SL/TP surish maslahatlari)
+
+- **Ixcham signal kartalari** (pump va AMD): sarlavha, kuch chizig'i (▰▰▰▱▱ + daraja A+/A/B), Kirish/SL/TP, 2-3 qator tasdiq,
+  muddat va "dogonyat qilma" chegarasi. Uzun tushuntirishlar va ogohlantirish matnlari olib tashlandi.
+  Juda kichik narxlar ilmiy yozuvsiz (0.0000123).
+- **Pump kuchi kuzatuvi** (`engine/trail.py`, `PUMP_TRAIL=1`): ochiq pump/dump signalida har ~5 daqiqada impuls kuchi (0-100)
+  o'lchanadi: hajm / me'yor, oxirgi 3 shamning yo'nalishi, cho'qqidan qaytish.
+  - Kuchli (>=65) va foyda >=0.8R: "🔥 Импульс усиливается" — SL ni oxirgi 3 sham orqasiga surish, TP ni uzoqlashtirish.
+  - Kuchsiz (<=35) va foyda >=`PUMP_TRAIL_MIN_R`: "⚠️ Импульс слабеет" — SL ni kirish/+0.5R ga, TP ni yaqinlashtirish, qisman yopish.
+  - Spamga qarshi: bir signalga `PUMP_TRAIL_MIN_GAP_SEC` (600 s) pauza, ko'pi bilan `PUMP_TRAIL_MAX_MSGS` (6) xabar.
+  - Bular MASLAHAT. Statistika (/pd_stats) avvalgi qat'iy qoidalar bilan hisoblanadi — natijalar solishtirma qoladi.
+- **Zakrep**: `PIN_ACTIVE_SIGNALS` standarti endi 1 (ochiq signal zakrepda, yopilganda olinadi). TP/SL/maslahatlar signalga reply.
+  Guruh/kanalda botga "pin messages" huquqi kerak (xato bo'lsa signal baribir yuboriladi).
+- **Menyu tozalandi**: buyruqlar ro'yxati 8 ta (scan, swing, pd_scan, check, report, pd_stats, params, settings).
+  Qolgan buyruqlar (backtest, swing_*, pd_detail, pd_backtest, set, reset_param, myid) YASHIRIN, lekin ishlaydi.
+  /start va /settings qisqartirildi.
+- /params da 4 ta yangi parametr: PUMP_TRAIL, PUMP_TRAIL_MIN_R, PUMP_TRAIL_MAX_MSGS, PUMP_TRAIL_MIN_GAP_SEC.
+- Test: faqat sintetik (kuch o'lchash, maslahat, throttling, SQLite bilan check_open, karta matnlari). Haqiqiy Telegram/Bybit'da sinab ko'rilmagan.
+- Win-rate (70-80%) KAFOLAT EMAS — /pd_stats va /pd_detail da o'zingiz o'lchang; `PUMP_MIN_SCORE` ni oshirish signallarni kamaytirib sifatini oshiradi.
+
 # v6.7: parametrlarni Telegram ICHIDAN o'zgartirish (/params, /set)
 
 - **/params** — tugmali menyu: 6 bo'lim, 74 ta parametr (AMD, pump/dump pol, SL/TP/pauza, filtrlar, boshqalar).
