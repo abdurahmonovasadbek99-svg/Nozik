@@ -127,7 +127,12 @@ async def _run(bot, force: bool = False):
                 if conflicts_with_btc_regime(s.symbol, s.side, regime):
                     logger.info(f"{s.symbol} [{prof}]: BTC rejimiga zid, o'tkazildi")
                     continue
+                from engine.market_ctx import enrich_signal
+                if not await asyncio.to_thread(enrich_signal, s, P["min_score"]):   # v6.9
+                    continue
                 s.sent_ts = await asyncio.to_thread(record_signal, s)
+                from engine import features
+                await asyncio.to_thread(features.record, s)    # v7.0
                 buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                                           tg.levels_of(s), s.tf, tg.meta_of(s, P))
                 await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML",

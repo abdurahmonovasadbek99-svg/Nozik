@@ -26,8 +26,10 @@ import bisect
 import gc
 import logging
 import math
+import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional, Tuple
 
@@ -89,6 +91,10 @@ class Alert:
     pressure: float = 0.0                # harakat tomonidagi sotib olish/sotish bosimi (-1..+1)
     ob_share: Optional[float] = None     # harakat tomonidagi orderbook ulushi (0..1)
     move_atr: float = 0.0
+    taker: Optional[float] = None        # v6.9: harakat tomonidagi taker ulushi (0..1)
+    crowd: Optional[float] = None        # v6.9: harakat tomonidagi akkaunt ulushi (L/S ratio)
+    liq_with: float = 0.0                # v6.9: harakatni qo'llagan likvidatsiyalar (USD)
+    liq_against: float = 0.0
     reasons: List[str] = field(default_factory=list)
     candles: list = field(default_factory=list)      # grafik uchun oxirgi 1m shamlar (DB ga yozilmaydi)
     tf: str = TF
@@ -318,7 +324,8 @@ def trend_ctx(c1h: Optional[list], price: float, up: bool) -> Optional[dict]:
 def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str = "neutral",
              turn24: float = 0.0, now_ms: Optional[int] = None,
              c5: Optional[list] = None, c1h: Optional[list] = None,
-             btc: Optional[dict] = None, tk: Optional[dict] = None, ob: Optional[float] = None) -> dict:
+             btc: Optional[dict] = None, tk: Optional[dict] = None, ob: Optional[float] = None,
+             ctx: Optional[dict] = None) -> dict:
     """1m shamlar (eskidan yangiga, oxirgisi — shakllanayotgan) bo'yicha tekshiradi.
     Qaytaradi: {"alert": Alert|None, "reject": sabab|None, "m": ko'rsatkichlar}.
     v6.4: btc (btc_context natijasi), tk (spread/funding) va ob (orderbook ulushi) ixtiyoriy — None bo'lsa
@@ -561,6 +568,36 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         elif ob <= C.PUMP_OB_BAD:
             score -= 5
             reasons.append(f"Стакан против ({ob * 100:.0f}%)")
+    # --- v6.9: haqiqiy taker hajmi, L/S ratio, likvidatsiyalar (ctx None bo'lsa — o'tkaziladi)
+    if ctx:
+        tk_s, crowd, lw, la = ctx.get("taker"), ctx.get("crowd"), ctx.get("liq_with", 0.0), ctx.get("liq_against", 0.0)
+        if tk_s is not None:
+            m["taker"] = tk_s
+            if C.PUMP_STRICT and tk_s <= C.PUMP_TAKER_REJECT:
+                return {"alert": None, "reject": f"тейкеры против движения: {tk_s * 100:.0f}% "
+                                                 f"{'покупают' if up else 'продают'} (≤{C.PUMP_TAKER_REJECT * 100:.0f}%)", "m": m}
+            if tk_s >= C.PUMP_TAKER_GOOD:
+                score += 5
+                reasons.append(f"Тейкеры {tk_s * 100:.0f}% {'покупают' if up else 'продают'}")
+            elif tk_s <= C.PUMP_TAKER_BAD:
+                score -= 6
+                reasons.append(f"Тейкеры слабо за движение ({tk_s * 100:.0f}%)")
+        if crowd is not None:
+            m["crowd"] = crowd
+            if crowd >= C.PUMP_LS_CROWDED:
+                score -= 4
+                reasons.append(f"Толпа уже {crowd * 100:.0f}% в эту сторону")
+            elif crowd <= C.PUMP_LS_FUEL:
+                score += 3
+                reasons.append(f"Большинство аккаунтов против ({(1 - crowd) * 100:.0f}%) — топливо для сквиза")
+        if ctx.get("liq_ok"):
+            m["liq"] = (lw, la)
+            if lw >= C.PUMP_LIQ_MIN_USD:
+                score += 5
+                reasons.append(f"Ликвидации {'шортов' if up else 'лонгов'} ${lw / 1000:.0f}k")
+            elif la >= C.PUMP_LIQ_MIN_USD and la > lw:
+                score -= 5
+                reasons.append(f"Ликвидации против движения ${la / 1000:.0f}k")
     conflict = conflicts_with_btc_regime(symbol, side, regime) and corr_w > 0
     if conflict:
         score -= C.PUMP_BTC_PENALTY * corr_w
@@ -589,7 +626,9 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
         btc_conflict=conflict, breakout=breakout, reasons=reasons, tp3=tp3, rr3=rr3,
         trend=(tc["trend"] if tc else None), line_broken=(tc["broken"] if tc else None),
         corr=corr, beta=beta, resid=resid, spread=spread, funding=funding, pressure=aligned_p,
-        ob_share=ob, move_atr=move_atr, candles=c[-60:])
+        ob_share=ob, move_atr=move_atr, candles=c[-60:],
+        taker=(ctx or {}).get("taker"), crowd=(ctx or {}).get("crowd"),
+        liq_with=(ctx or {}).get("liq_with", 0.0) or 0.0, liq_against=(ctx or {}).get("liq_against", 0.0) or 0.0)
     return {"alert": alert, "reject": None, "m": m}
 
 
@@ -661,19 +700,24 @@ def mark_sent(a: Alert):
 
 
 # ---------------------------------------------------- v6.4: 2-bosqich yordamchilari
+_BTC_LOCK = threading.Lock()
+
+
 def _load_btc(store: dict) -> None:
-    """BTC 1m/5m shamlari — skanda BIR marta (faqat nomzod 2-bosqichga o'tsa)."""
-    if store.get("done"):
-        return
-    store["done"] = True
-    try:
-        c1 = A.bybit_klines("BTCUSDT", "1", 60)
-        time.sleep(0.1)
-        c5 = A.bybit_klines("BTCUSDT", "5", 130)
-        time.sleep(0.1)
-        store["c1"], store["c5"] = c1, (c5[:-1] if c5 else None)
-    except Exception as e:
-        logger.warning(f"BTC ma'lumoti olinmadi: {e}")
+    """BTC 1m/5m shamlari — skanda BIR marta (faqat nomzod 2-bosqichga o'tsa). v7.0: parallel ishchilar
+    uchun qulf — birinchisi yuklaydi, qolganlari tayyor bo'lguncha kutadi."""
+    with _BTC_LOCK:
+        if store.get("done"):
+            return
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                f1 = ex.submit(A.bybit_klines, "BTCUSDT", "1", 60)
+                f5 = ex.submit(A.bybit_klines, "BTCUSDT", "5", 130)
+                c1, c5 = f1.result(), f5.result()
+            store["c1"], store["c5"] = c1, (c5[:-1] if c5 else None)
+        except Exception as e:
+            logger.warning(f"BTC ma'lumoti olinmadi: {e}")
+        store["done"] = True
 
 
 def _fetch_ob_share(sym: str, up: bool) -> Optional[float]:
@@ -695,22 +739,107 @@ def _fetch_ob_share(sym: str, up: bool) -> Optional[float]:
 
 
 def _full_eval(sym: str, c: list, oi: Optional[float], regime: str, turn: float, res: dict, btc_store: dict) -> dict:
-    """1-bosqichdan o'tgan nomzod uchun to'liq tekshiruv: 5m + 1h + BTC beta + orderbook."""
+    """1-bosqichdan o'tgan nomzod uchun to'liq tekshiruv. v7.0: so'rovlar 2 ta PARALLEL raundda
+    (1: 5m + 1h + BTC; 2: orderbook + taker + L/S) — oldin ~7 ta ketma-ket edi."""
     tk = _TK.get(sym)
-    c5 = A.bybit_klines(sym, "5", 130)
-    time.sleep(0.1)
-    c1h = _fetch_1h_closed(sym) if C.PUMP_TREND_FILTER else None
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f5 = ex.submit(A.bybit_klines, sym, "5", 130)
+        f1h = ex.submit(_fetch_1h_closed, sym) if C.PUMP_TREND_FILTER else None
+        fbtc = ex.submit(_load_btc, btc_store) if C.PUMP_USE_BTC_BETA else None
+        c5 = f5.result()
+        c1h = f1h.result() if f1h else None
+        if fbtc:
+            fbtc.result()
     btc = None
     if C.PUMP_USE_BTC_BETA and c5:
-        _load_btc(btc_store)
         btc = btc_context(btc_store.get("c1"), btc_store.get("c5"), c5[:-1])
     res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h, btc=btc, tk=tk)
     a = res["alert"]
-    if a and C.PUMP_USE_ORDERBOOK:
-        share = _fetch_ob_share(sym, a.kind == "PUMP")
-        if share is not None:
-            res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h, btc=btc, tk=tk, ob=share)
+    if a:
+        up = a.kind == "PUMP"
+        share, ctx = None, None
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fob = ex.submit(_fetch_ob_share, sym, up) if C.PUMP_USE_ORDERBOOK else None
+            fctx = None
+            if C.PUMP_USE_CTX or C.PUMP_USE_LIQ:
+                from engine import market_ctx
+                fctx = ex.submit(market_ctx.pump_ctx, sym, up)   # ichida taker + L/S ham parallel
+            share = fob.result() if fob else None
+            ctx = fctx.result() if fctx else None
+        if share is not None or ctx:
+            res = evaluate(sym, c, oi, regime, turn, c5=c5, c1h=c1h, btc=btc, tk=tk, ob=share, ctx=ctx)
     return res
+
+
+# ------------------------------------------------- OI o'syapti, narx tinch (v6.9)
+_PRE_SENT: Dict[str, float] = {}          # sym -> oxirgi ogohlantirish vaqti
+_PRE_TIMES: Deque[float] = deque()        # soatlik limit uchun
+PRE_QUEUE: List[dict] = []                # scan() to'ldiradi, _run() yuboradi
+
+
+def pre_scan(now: float, uni: List[Tuple[str, float, float]], exclude: set) -> List[dict]:
+    """Impuls OLDIDAN ogohlantirish: ~15 daqiqada OI sezilarli o'sdi, narx esa deyarli turgan
+    (pozitsiyalar yig'ilyapti). Bu signal EMAS — SL/TP yo'q, statistikaga yozilmaydi."""
+    if not C.PUMP_PRE:
+        return []
+    while _PRE_TIMES and _PRE_TIMES[0] < now - 3600:
+        _PRE_TIMES.popleft()
+    room = C.PUMP_PRE_MAX_PER_HOUR - len(_PRE_TIMES)
+    if room <= 0:
+        return []
+    found = []
+    for sym, price, turn in uni:
+        if sym in exclude or now - _PRE_SENT.get(sym, 0.0) < C.PUMP_PRE_COOLDOWN_SEC:
+            continue
+        h = _HIST.get(sym)
+        if not h or h[-1][2] < C.PUMP_PRE_MIN_OI_USD:
+            continue
+        old = _at(sym, 900, now, 150)
+        if not old or old[1] <= 0 or old[2] <= 0:
+            continue
+        oi_ch = (h[-1][2] / old[2] - 1) * 100
+        px_ch = (price / old[1] - 1) * 100
+        if oi_ch >= C.PUMP_PRE_OI_PCT and abs(px_ch) <= C.PUMP_PRE_PRICE_PCT:
+            found.append((oi_ch, sym, px_ch, turn))
+    found.sort(reverse=True)
+    out: List[dict] = []
+    from engine import market_ctx
+    for oi_ch, sym, px_ch, turn in found[:min(2, room)]:
+        taker = market_ctx.taker_share(sym)
+        ls = market_ctx.long_share(sym)
+        tk = _TK.get(sym) or {}
+        fund = tk.get("funding")
+        vote = 0
+        if taker is not None:
+            vote += 1 if taker >= 0.58 else (-1 if taker <= 0.42 else 0)
+        if ls is not None:                         # olomon bir tomonda — teskari tomonga siqish yoqilg'isi
+            vote += 1 if ls <= 0.42 else (-1 if ls >= 0.62 else 0)
+        if fund is not None:
+            vote += 1 if fund <= -0.05 else (-1 if fund >= 0.05 else 0)
+        bias = "up" if vote >= 1 else ("down" if vote <= -1 else "none")
+        _PRE_SENT[sym] = now
+        _PRE_TIMES.append(now)
+        out.append({"symbol": sym, "oi": oi_ch, "px": px_ch, "taker": taker, "ls": ls,
+                    "funding": fund, "bias": bias, "turn": turn})
+    return out
+
+
+def format_pre(d: dict) -> str:
+    bias = {"up": "⬆️ вверх", "down": "⬇️ вниз", "none": "неясно"}[d["bias"]]
+    bits = []
+    if d.get("taker") is not None:
+        bits.append(f"тейкеры {d['taker'] * 100:.0f}% покупают")
+    if d.get("ls") is not None:
+        bits.append(f"аккаунтов в лонгах {d['ls'] * 100:.0f}%")
+    if d.get("funding") is not None:
+        bits.append(f"funding {d['funding']:+.3f}%")
+    lines = [
+        f"⏳ <b>НАКОПЛЕНИЕ · {d['symbol']}</b>",
+        f"OI {d['oi']:+.1f}% за 15м · цена {d['px']:+.1f}% (тихо)",
+        f"🧭 Уклон: <b>{bias}</b>" + (f" · {' · '.join(bits)}" if bits else ""),
+        "⚠️ Предупреждение, не сигнал входа: движение возможно, но направление не гарантировано.",
+    ]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------- skan
@@ -729,6 +858,10 @@ def scan() -> List[Alert]:
     uni = _update_history(items, now)
     cands = _prefilter(now, uni)
     STATE["universe"], STATE["candidates"] = len(uni), len(cands)
+    try:
+        PRE_QUEUE.extend(pre_scan(now, uni, {x[1] for x in cands}))
+    except Exception as e:
+        logger.warning(f"Pre-scan xatosi: {e}")
     if not cands:
         return []
 
@@ -746,15 +879,26 @@ def scan() -> List[Alert]:
 
     out: List[Alert] = []
     btc_store: dict = {}
-    for _, sym, turn in cands:
-        c = A.bybit_klines(sym, "1", 60)
-        time.sleep(0.1)
-        if not c:
+    def one(item):
+        _, sym, turn = item
+        try:
+            c = A.bybit_klines(sym, "1", 60)
+            if not c:
+                return sym, None
+            oi = _oi_change(sym, now)
+            res = evaluate(sym, c, oi, regime, turn, tk=_TK.get(sym))
+            if res["alert"]:                          # 2-bosqich: 5m + 1h trend + BTC beta + orderbook + taker/LS
+                res = _full_eval(sym, c, oi, regime, turn, res, btc_store)
+            return sym, res
+        except Exception as e:
+            logger.warning(f"Pump {sym}: tekshiruv xatosi: {e}")
+            return sym, None
+
+    with ThreadPoolExecutor(max_workers=max(1, C.PUMP_WORKERS)) as ex:
+        results = list(ex.map(one, cands))
+    for sym, res in results:                          # cooldown/DB tekshiruvlari — ketma-ket
+        if not res:
             continue
-        oi = _oi_change(sym, now)
-        res = evaluate(sym, c, oi, regime, turn, tk=_TK.get(sym))
-        if res["alert"]:                      # 2-bosqich: 5m (diapazon) + 1h trend + BTC beta + orderbook
-            res = _full_eval(sym, c, oi, regime, turn, res, btc_store)
         a = res["alert"]
         if not a:
             logger.debug(f"Pump {sym}: {res['reject']}")
@@ -765,6 +909,7 @@ def scan() -> List[Alert]:
             logger.info(f"Pump {sym}: yaqinda SL urgan, qayta kirilmaydi")
             continue
         out.append(a)
+    STATE["last_dur"] = round(time.time() - now, 1)
     out.sort(key=lambda x: -x.score)
     out = out[:min(C.PUMP_MAX_ALERTS_PER_SCAN, room)]
     STATE["alerts"] += len(out)
@@ -796,55 +941,63 @@ def _pct(a: Alert, v: float) -> str:
 
 
 def format_alert(a: Alert) -> str:
-    """Telegram HTML matni."""
+    """Ixcham pump/dump kartasi (Telegram HTML)."""
+    from engine.chart import grade_of
     from engine.tg import p
+    from engine.trail import bar
     up = a.kind == "PUMP"
     head = "🚀 PUMP" if up else "🩸 DUMP"
-    strong = "  🔥 СИЛЬНЫЙ" if a.score >= 80 else ""
-    oi = f"{a.oi_chg:+.1f}%" if a.oi_chg is not None else "нет данных"
+    fire = " 🔥" if a.score >= 80 else ""
+    grade, _ = grade_of(a.score)
     hours = C.PUMP_EXPIRE_CANDLES * 5 / 60
-    line = "━━━━━━━━━━━━━━━━"
-    brk = f"🧱 Пробой диапазона {C.PUMP_BREAKOUT_HOURS} ч\n" if a.breakout else ""
-    tr = {"up": "↑ вверх", "down": "↓ вниз", "flat": "→ боковик"}.get(a.trend or "", "")
-    if tr:
-        brk += f"📐 Тренд 1ч: {tr}" + (" · линия тренда пробита" if a.line_broken else "") + "\n"
-    extra = ""
-    if a.corr is not None:
-        own = f" · своё движение {a.resid:+.1f}%" if a.resid is not None else ""
-        extra += f"🔗 BTC: corr {a.corr:.2f} · β {a.beta:.1f}{own}\n"
+    risk = abs(a.entry - a.sl)
+    long_ = a.side == "LONG"
+    limit_px = a.entry + (0.5 * risk if long_ else -0.5 * risk)
+
+    mv = f"📊 {a.ch5:+.1f}%/5м · {a.ch15:+.1f}%/15м · объём ×{a.vol_x:.1f}"
     bits = []
-    if a.spread is not None:
-        bits.append(f"спред {a.spread:.2f}%")
-    if a.funding is not None:
-        bits.append(f"funding {a.funding:+.3f}%")
+    if a.oi_chg is not None:
+        bits.append(f"OI {a.oi_chg:+.1f}%")
     if a.ob_share is not None:
         bits.append(f"стакан {a.ob_share * 100:.0f}% за")
-    bits.append(f"давление {a.pressure:+.2f}")
-    extra += "⚖️ " + " · ".join(bits) + "\n"
-    tp3_line = ""
+    if a.funding is not None and abs(a.funding) >= 0.05:
+        bits.append(f"funding {a.funding:+.2f}%")
+    if a.taker is not None:
+        bits.append(f"тейкеры {a.taker * 100:.0f}%")
+    if a.crowd is not None:
+        bits.append(f"L/S {a.crowd * 100:.0f}% за")
+    if a.liq_with >= C.PUMP_LIQ_MIN_USD:
+        bits.append(f"ликв. ${a.liq_with / 1000:.0f}k")
+    ctx = []
+    if a.breakout:
+        ctx.append(f"пробой {C.PUMP_BREAKOUT_HOURS}ч")
+    tr = {"up": "↑", "down": "↓", "flat": "→"}.get(a.trend or "")
+    if tr:
+        ctx.append(f"тренд 1ч {tr}")
+    if a.corr is not None and a.resid is not None:
+        ctx.append(f"BTC-независимо {a.resid:+.1f}%")
+    if a.btc_conflict:
+        ctx.append("⚠️ против BTC")
+
+    lines = [
+        f"{head} · <b>{a.symbol}</b>{fire}",
+        f"{bar(a.score)} <b>{grade}</b> · {a.score}/100 · <b>{a.side}</b>",
+        "",
+        f"🎯 Вход <code>{p(a.entry)}</code>",
+        f"🛑 SL <code>{p(a.sl)}</code> ({_pct(a, a.sl)})",
+        f"✅ TP1 <code>{p(a.tp1)}</code> ({_pct(a, a.tp1)}) · TP2 <code>{p(a.tp2)}</code> ({_pct(a, a.tp2)})",
+    ]
     if a.tp3:
-        tp3_line = (f"🏆 TP3: <code>{p(a.tp3)}</code> ({_pct(a, a.tp3)}) — сильный импульс\n"
-                    f"📌 Закрытие 40% / 30% / 30%: после TP1 SL → вход, после TP2 SL → TP1\n")
-    return (
-        f"{head} · <b>{a.symbol}</b>{strong}\n"
-        f"{line}\n"
-        f"📈 {a.ch5:+.1f}% за 5 мин · {a.ch15:+.1f}% за 15 мин\n"
-        f"📊 Объём: x{a.vol_x:.1f} от нормы (пик x{a.peak_x:.1f})\n"
-        f"🧭 OI: {oi} · оборот 24ч: {a.turn24 / 1e6:.1f}M USDT\n"
-        f"{brk}{extra}"
-        f"⭐ Скор: {a.score}/100"
-        f"{'  ⚠️ против BTC' if a.btc_conflict else ''}\n"
-        f"{line}\n"
-        f"💡 Идея по импульсу: <b>{a.side}</b> (риск {a.risk_pct:.1f}%)\n"
-        f"🎯 Вход ≈ <code>{p(a.entry)}</code>\n"
-        f"🛑 SL: <code>{p(a.sl)}</code> ({_pct(a, a.sl)})\n"
-        f"✅ TP1: <code>{p(a.tp1)}</code> ({_pct(a, a.tp1)}) · TP2: <code>{p(a.tp2)}</code> ({_pct(a, a.tp2)})\n"
-        f"{tp3_line}"
-        f"⏱ Срок: ~{hours:.0f} ч\n"
-        f"{line}\n"
-        f"⚠️ Это детектор импульса, не AMD-сигнал. Вход по движению — повышенный риск; "
-        f"если цена уже ушла дальше, не догоняйте."
-    )
+        lines.append(f"🏆 TP3 <code>{p(a.tp3)}</code> ({_pct(a, a.tp3)}) · закрытие 40/30/30")
+    lines += ["", mv]
+    if bits:
+        lines.append("🧭 " + " · ".join(bits))
+    if ctx:
+        lines.append("🧱 " + " · ".join(ctx))
+    chase = "выше" if long_ else "ниже"
+    lines.append(f"⏱ ~{hours:.0f} ч · не догонять {chase} <code>{p(limit_px)}</code>")
+    lines.append("💡 Подсказки по SL/TP придут ответом на это сообщение")
+    return "\n".join(lines)
 
 
 def format_check(symbol: str, res: dict) -> str:
@@ -1080,6 +1233,8 @@ async def _run(bot) -> int:
             except Exception as e:
                 logger.error(f"Pump signalni yozishda xato ({a.symbol}): {e}")
             mark_sent(a)
+            from engine import features
+            await asyncio.to_thread(features.record, a)       # v7.0: aniqlikni o'lchash uchun
             buf = None
             if C.PUMP_SEND_CHART:             # grafik xatosi xabarni to'xtatmaydi
                 try:
@@ -1095,6 +1250,13 @@ async def _run(bot) -> int:
             sent += 1
             logger.info(f"Pump alert: {a.symbol} {a.kind} skor={a.score} "
                         f"5m={a.ch5:+.1f}% x{a.vol_x:.1f}")
+        pre, PRE_QUEUE[:] = list(PRE_QUEUE), []
+        for d in pre:                         # v6.9: "OI o'syapti, narx tinch" ogohlantirishlari
+            try:
+                await tg.broadcast(bot, ADMIN_CHAT_IDS, format_pre(d), None, parse_mode="HTML")
+                logger.info(f"Pre-alert: {d['symbol']} OI {d['oi']:+.1f}% narx {d['px']:+.1f}% uklon={d['bias']}")
+            except Exception as e:
+                logger.warning(f"Pre-alert yuborilmadi ({d.get('symbol')}): {e}")
         if sent:
             gc.collect()                      # grafik ishlatgan xotirani qaytarish (Render bepul tarifi)
         return sent
@@ -1129,6 +1291,16 @@ async def _job_eval(context):
     for r in closed:
         await tg.notify(context.bot, ADMIN_CHAT_IDS, tg.result_text(r, "pump"),
                         r["symbol"], r.get("tf", TF), r.get("sent_ts"), unpin=True)
+    # v6.8: ochiq signallarda impuls kuchi — SL/TP surish maslahati (asl signalga reply)
+    try:
+        from engine import trail
+        tips = await asyncio.to_thread(trail.check_open, A.bybit_klines, TF, EVAL_INTERVAL)
+    except Exception as e:
+        logger.warning(f"Trail xatosi: {e}")
+        tips = []
+    for t in tips:
+        await tg.notify(context.bot, ADMIN_CHAT_IDS, t["text"], t["symbol"], t["tf"], t["sent_ts"],
+                        parse_mode="HTML")
 
 
 async def cmd_pd_scan(update, context):
@@ -1226,26 +1398,27 @@ async def cmd_pd_backtest(update, context):
     await update.message.reply_text(format_backtest(r))
 
 
+def _liq_on() -> bool:
+    try:
+        from engine import liq
+        return bool(liq.STATE["connected"])
+    except Exception:
+        return False
+
+
 def settings_text() -> str:
     return (
-        "🚀 Детектор pump/dump (отдельно от AMD): "
-        f"{'включён' if C.USE_PUMP_DETECTOR else 'выключен'}\n"
-        f"Порог движения: {C.PUMP_MOVE_5M_PCT:g}% / 5м или {C.PUMP_MOVE_15M_PCT:g}% / 15м\n"
-        f"Объём: от x{C.PUMP_VOL_X:g} | мин. скор {C.PUMP_MIN_SCORE} | "
-        f"строгий режим: {'да' if C.PUMP_STRICT else 'нет'} | график: {'да' if C.PUMP_SEND_CHART else 'нет'}\n"
-        f"Оборот 24ч: {C.PUMP_MIN_TURNOVER_USDT / 1e6:g}M — {C.PUMP_MAX_TURNOVER_USDT / 1e6:g}M USDT\n"
-        f"Фильтры v6.2: тренд 1ч {'да' if C.PUMP_TREND_FILTER else 'нет'} | мин. откат {C.PUMP_MIN_PULLBACK * 100:.0f}% | "
-        f"SL +{C.PUMP_SL_ATR:g}×ATR | макс. издержки {C.PUMP_MAX_COST_R:.2f}R | SL-cooldown {C.PUMP_SL_COOLDOWN_SECONDS // 60} мин\n"
-        f"Фильтры v6.4: BTC β/residual {'да' if C.PUMP_USE_BTC_BETA else 'нет'} (corr {C.PUMP_CORR_LOW:g}/{C.PUMP_CORR_HIGH:g}) | "
-        f"спред ≤{C.PUMP_MAX_SPREAD_PCT:g}% | ≥{C.PUMP_MIN_ATR_MULT:g}×ATR | давление ≥{C.PUMP_MIN_PRESSURE:g} | "
-        f"тень ≤{C.PUMP_MAX_WICK_FRAC * 100:.0f}% | стакан {'да' if C.PUMP_USE_ORDERBOOK else 'нет'}\n"
-        f"Скан: каждые {C.PUMP_SCAN_INTERVAL_SECONDS} с | cooldown {C.PUMP_COOLDOWN_SECONDS // 60} мин | "
-        f"макс. {C.PUMP_MAX_ALERTS_PER_HOUR}/час\n"
-        f"v6.5: пауза после {C.PUMP_PAUSE_AFTER_SL} SL подряд на {C.PUMP_PAUSE_SECONDS // 60} мин | "
-        + (f"ранний выход: {C.PUMP_STALE_CANDLES} св. без +{C.PUMP_STALE_MIN_MFE_R:g}R"
-           if C.PUMP_STALE_CANDLES else "ранний выход: выкл")
-        + f" | ответ на сигнал: {'да' if C.REPLY_TO_SIGNAL else 'нет'}"
-        + f" | закреп: {'да' if C.PIN_ACTIVE_SIGNALS else 'нет'}\n"
+        f"🚀 <b>Pump/Dump</b>: {'вкл' if C.USE_PUMP_DETECTOR else 'выкл'} · "
+        f"скор ≥{C.PUMP_MIN_SCORE} · строгий: {'да' if C.PUMP_STRICT else 'нет'}\n"
+        f"Порог: {C.PUMP_MOVE_5M_PCT:g}%/5м или {C.PUMP_MOVE_15M_PCT:g}%/15м · объём ×{C.PUMP_VOL_X:g} · "
+        f"оборот {C.PUMP_MIN_TURNOVER_USDT / 1e6:g}–{C.PUMP_MAX_TURNOVER_USDT / 1e6:g}M\n"
+        f"Скан {C.PUMP_SCAN_INTERVAL_SECONDS} с · cooldown {C.PUMP_COOLDOWN_SECONDS // 60} мин · "
+        f"макс. {C.PUMP_MAX_ALERTS_PER_HOUR}/час · пауза после {C.PUMP_PAUSE_AFTER_SL} SL\n"
+        f"Контекст: тейкеры+L/S {'да' if C.PUMP_USE_CTX else 'нет'} · ликвидации "
+        f"{('онлайн' if _liq_on() else 'нет связи') if C.PUMP_USE_LIQ else 'выкл'} · "
+        f"накопление (OI↑, цена тихо): {'да' if C.PUMP_PRE else 'нет'} · AMD-контекст: {'да' if C.AMD_USE_CTX else 'нет'}\n"
+        f"Подсказки SL/TP: {'да' if C.PUMP_TRAIL else 'нет'} · reply: {'да' if C.REPLY_TO_SIGNAL else 'нет'} · "
+        f"закреп: {'да' if C.PIN_ACTIVE_SIGNALS else 'нет'}\n"
     )
 
 

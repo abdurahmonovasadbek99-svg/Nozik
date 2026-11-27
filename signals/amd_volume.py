@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import bisect
 import logging
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 from dataclasses import dataclass, field
@@ -101,6 +102,8 @@ class Signal:
     range_pct: float = 0.0
     sweep_x: float = 0.0
     confirm_x: float = 0.0
+    ctx_line: str = ""         # v6.9: OI / funding / L/S / taker chiplari (kartada ko'rsatiladi)
+    ctx_adj: int = 0           # v6.9: kontekst bergan ball tuzatishi
 
 
 # ----------------------------------------------------------------- helpers
@@ -316,6 +319,9 @@ def _try(symbol, c, s, k, h1, bn, P) -> Optional[Signal]:
 
 # -------------------------------------------------------------- data fetch
 _S = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=24)   # v7.0: parallel so'rovlar uchun
+_S.mount("https://", _adapter)
+_S.mount("http://", _adapter)
 
 
 _WARNED: Dict[str, float] = {}
@@ -505,6 +511,31 @@ def _fresh(sig: Signal, P: dict) -> bool:
     return True
 
 
+def _scan_one(sym: str, P: dict):
+    """Bitta coin: (ma'lumot olindimi, Signal|None, eskirgan-mi). Xato butun skanni to'xtatmaydi."""
+    try:
+        c = bybit_klines(sym, P["tf"], 200)
+        time.sleep(P["req_sleep"])
+        if not c:
+            return False, None, False
+        c = c[:-1]  # hali shakllanayotgan shamni olib tashlaymiz
+        # 1-bosqich: arzon filtr; 2-bosqich: trend + Binance hajmi bilan tasdiq
+        if not analyze(sym, c, min_score=P["min_score"] - EXTRA_SCORE_MAX, P=P):
+            return True, None, False
+        h1 = bybit_klines(sym, P["htf"], 80)
+        h1 = h1[:-1] if h1 else None
+        bn = _bn_closed(sym, P)
+        sig = analyze(sym, c, h1, bn, P=P)
+        if not sig:
+            return True, None, False
+        if not _fresh(sig, P):
+            return True, None, True
+        return True, sig, False
+    except Exception as e:
+        logger.warning(f"{sym} [{P.get('label')}] skan xatosi: {e}")
+        return False, None, False
+
+
 def scan(P: Optional[dict] = None, max_symbols: Optional[int] = None,
          force: bool = False) -> List[Signal]:
     """P — profil (default 15m). force=False bo'lsa, bir xil yopilgan sham qayta
@@ -516,35 +547,31 @@ def scan(P: Optional[dict] = None, max_symbols: Optional[int] = None,
     if not force and _DONE.get(P["label"]) == expected:
         return []
 
+    t0 = time.time()
     syms = universe()[:max_symbols or P["max_symbols"]]
     LAST_SCAN.update(count=len(syms), ts=int(now), skipped_stale=0)
     out: List[Signal] = []
     ok = 0
-    for sym in syms:
+    todo: List[str] = []
+    for sym in syms:                                  # cooldown tekshiruvi (DB) — ketma-ket, tez
         if recently_signaled(sym, P["label"], P["cooldown_sec"]):
             ok += 1
-            continue
-        c = bybit_klines(sym, P["tf"], 200)
-        time.sleep(P["req_sleep"])
-        if not c:
-            continue
-        ok += 1
-        c = c[:-1]  # hali shakllanayotgan shamni olib tashlaymiz
-        # 1-bosqich: arzon filtr; 2-bosqich: trend + Binance hajmi bilan tasdiq
-        if not analyze(sym, c, min_score=P["min_score"] - EXTRA_SCORE_MAX, P=P):
-            continue
-        h1 = bybit_klines(sym, P["htf"], 80)
-        h1 = h1[:-1] if h1 else None
-        bn = _bn_closed(sym, P)
-        sig = analyze(sym, c, h1, bn, P=P)
-        if not sig:
-            continue
-        if not _fresh(sig, P):
-            LAST_SCAN["skipped_stale"] += 1
-            continue
-        out.append(sig)
+        else:
+            todo.append(sym)
+
+    # v7.0: tarmoq so'rovlari parallel (oldin ketma-ket edi: ~400 coin x ~0.3 s)
+    with ThreadPoolExecutor(max_workers=max(1, C.SCAN_WORKERS)) as ex:
+        for good, sig, stale in ex.map(lambda sy: _scan_one(sy, P), todo):
+            if good:
+                ok += 1
+            if stale:
+                LAST_SCAN["skipped_stale"] += 1
+            if sig:
+                out.append(sig)
     if syms and ok >= 0.9 * len(syms):
         _DONE[P["label"]] = expected      # katta xato bo'lsa — keyingi skanerda qayta uriniladi
+    LAST_SCAN["dur"] = round(time.time() - t0, 1)
+    LAST_SCAN["tf"] = P["label"]
     out.sort(key=lambda s: -s.score)
     return out
 
