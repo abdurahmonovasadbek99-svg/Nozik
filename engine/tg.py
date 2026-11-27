@@ -37,6 +37,11 @@ RESULT_TEXT = {
 
 
 def p(x: float) -> str:
+    """Narx matni. Juda kichik narxlar (PEPE...) ilmiy yozuvsiz: 0.0000123."""
+    if x and abs(x) < 1e-4:
+        import math
+        dec = int(-math.floor(math.log10(abs(x)))) + 3
+        return f"{x:.{dec}f}"
     return f"{x:.6g}"
 
 
@@ -50,12 +55,13 @@ def reason_line(text: str) -> str:
 
 
 def format_signal(s, P: dict) -> str:
-    """Текст сигнала (Telegram HTML) — подпись к картинке, parse_mode="HTML"."""
+    """Ixcham AMD signal kartasi (Telegram HTML) — rasm izohi, parse_mode="HTML"."""
     from engine.chart import grade_of
+    from engine.trail import bar
 
     is_long = s.side == "LONG"
     dot = "🟢" if is_long else "🔴"
-    premium = "  💎 PREMIUM" if s.score >= 85 else ""
+    premium = " 💎" if s.score >= 85 else ""
     grade, _ = grade_of(s.score)
     risk = abs(s.entry - s.sl)
     limit_px = s.entry + P["max_chase_r"] * risk * (1 if is_long else -1)
@@ -64,34 +70,33 @@ def format_signal(s, P: dict) -> str:
     cost = sim.cost_r(s.entry, s.sl, P["fee_pct"], P["slip_pct"])
 
     def pct(v: float) -> str:
-        return f"{(v - s.entry) / s.entry * 100:+.2f}%"
+        return f"{(v - s.entry) / s.entry * 100:+.1f}%"
 
-    conf = [f"объём sweep x{s.sweep_x:.1f}"] if s.sweep_x else ["sweep"]
+    conf = [f"sweep ×{s.sweep_x:.1f}"] if s.sweep_x else ["sweep"]
     if s.mss:
         conf.append("MSS")
     if s.fvg:
         conf.append("FVG")
     if s.bn_ok is True:
-        conf.append("объём Binance ✓")
+        conf.append("Binance ✓")
     if s.htf_ok is True:
         conf.append(f"тренд {P['htf_label']} ✓")
 
-    line = "━━━━━━━━━━━━━━━━"
+    chase = "выше" if is_long else "ниже"
+    ctx = getattr(s, "ctx_line", "")
+    ctx_row = f"🧭 {ctx}\n" if ctx else ""
     return (
-        f"{dot} <b>{s.side} · {s.symbol} · {s.tf}</b>{premium}\n"
-        f"{line}\n"
-        f"🎯 Вход: <code>{p(s.entry)}</code>\n"
-        f"🛑 SL: <code>{p(s.sl)}</code>  <i>({pct(s.sl)})</i>\n"
-        f"✅ TP1: <code>{p(s.tp1)}</code>  <i>({pct(s.tp1)})</i>\n"
-        f"✅ TP2: <code>{p(s.tp2)}</code>  <i>({pct(s.tp2)})</i>\n"
-        f"{line}\n"
-        f"⭐ Качество: <b>{grade}</b> ({s.score}/100)\n"
-        f"🧩 Конфлюэнс: {' · '.join(conf)}\n"
-        f"🧭 AMD: Accumulation → Manipulation → Distribution\n"
-        f"📦 Диапазон {s.range_pct:.1f}% · объём x{s.acc_ratio:.2f}\n"
-        f"⚖️ R:R 1:{s.rr1:.1f} – 1:{s.rr2:.1f} · издержки ≈ {cost:.2f}R\n"
-        f"⏱ Срок: {dur} · не догонять: до <code>{p(limit_px)}</code>\n"
-        f"💡 На TP1 закрыть 50%, SL — в безубыток"
+        f"{dot} <b>{s.side} · {s.symbol}</b> · {s.tf}{premium}\n"
+        f"{bar(s.score)} <b>{grade}</b> · {s.score}/100\n"
+        f"\n"
+        f"🎯 Вход <code>{p(s.entry)}</code>\n"
+        f"🛑 SL <code>{p(s.sl)}</code> ({pct(s.sl)})\n"
+        f"✅ TP1 <code>{p(s.tp1)}</code> ({pct(s.tp1)}) · TP2 <code>{p(s.tp2)}</code> ({pct(s.tp2)})\n"
+        f"\n"
+        f"🧩 {' · '.join(conf)}\n"
+        f"{ctx_row}"
+        f"⚖️ R:R 1:{s.rr1:.1f}–1:{s.rr2:.1f} · издержки ≈{cost:.2f}R · ⏱ {dur}\n"
+        f"💡 TP1: закрыть 50%, SL → вход · не догонять {chase} <code>{p(limit_px)}</code>"
     )
 
 
@@ -232,24 +237,23 @@ async def notify(bot, chat_ids: Iterable[int], text: str, symbol: str, tf: str, 
 
 
 def progress_text(ev: dict, label: str) -> str:
-    """TP1/TP2 olinganda: pozitsiyani qo'lda boshqarish uchun ko'rsatma."""
+    """TP1/TP2 olinganda: pozitsiyani qo'lda boshqarish uchun qisqa ko'rsatma."""
     sym, side, st, three = ev["symbol"], ev["side"], ev["stage"], ev["three"]
     if st == 1:
         part = "40%" if three else "50%"
-        return (f"🎯 TP1 взят [{label}]\n{sym} {side}: закройте ~{part}, SL перенесите на вход "
-                f"({ev['entry']:.6g})")
+        return f"🎯 TP1 · {sym} {side}\nЗакройте ~{part}, SL → вход ({ev['entry']:.6g})"
     if not three:
-        return f"🎯🎯 TP2 взят [{label}]\n{sym} {side}: позиция закрыта полностью."
-    return (f"🎯🎯 TP2 взят [{label}]\n{sym} {side}: закройте ещё ~30%, SL перенесите на TP1 "
-            f"({ev['tp1']:.6g}), остаток — к TP3 ({ev['tp3']:.6g})")
+        return f"🎯🎯 TP2 · {sym} {side}\nПозиция закрыта полностью"
+    return (f"🎯🎯 TP2 · {sym} {side}\nЗакройте ~30%, SL → TP1 ({ev['tp1']:.6g}), "
+            f"остаток к TP3 ({ev['tp3']:.6g})")
 
 
 def result_text(r: dict, label: str) -> str:
-    """Signal yopilganda yakuniy xabar (MFE/MAE bilan)."""
+    """Signal yopilganda yakuniy xabar (qisqa)."""
     extra = ""
     if r.get("mfe_r") is not None:
-        extra = f"\nMFE {r['mfe_r']:.2f}R · MAE {r['mae_r']:.2f}R"
-    return (f"{RESULT_TEXT.get(r['status'], r['status'])} [{label}]\n"
+        extra = f" · MFE {r['mfe_r']:.1f}R / MAE {r['mae_r']:.1f}R"
+    return (f"{RESULT_TEXT.get(r['status'], r['status'])}\n"
             f"{r['symbol']} {r['side']}: {r['result_r']:+.2f}R{extra}")
 
 
