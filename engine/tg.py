@@ -194,19 +194,23 @@ async def _track(bot, chat_id, msg, track) -> None:
 
 
 async def broadcast(bot, chat_ids: Iterable[int], text: str, buf=None, parse_mode=None,
-                    reply_markup=None, track=None) -> None:
-    """track=(symbol, tf, sent_ts) berilsa — xabar id si saqlanadi va notify() shunga reply qiladi."""
+                    reply_markup=None, track=None) -> int:
+    """track=(symbol, tf, sent_ts) berilsa — xabar id si saqlanadi va notify() shunga reply qiladi.
+    Qaytaradi: muvaffaqiyatli yuborilgan chatlar soni (0 = hech kimga yetmadi)."""
+    ok = 0
     for chat_id in chat_ids:
         try:
             msg = await send_with_chart(bot, chat_id, text, buf, parse_mode, reply_markup)
         except Exception as e:
             logger.error(f"Xabar yuborishda xato ({chat_id}): {e}")
             continue
+        ok += 1
         if track and track[2] and msg is not None:
             try:
                 await _track(bot, chat_id, msg, track)
             except Exception as e:
                 logger.warning(f"Signal xabarini kuzatishda xato ({chat_id}): {e}")
+    return ok
 
 
 async def notify(bot, chat_ids: Iterable[int], text: str, symbol: str, tf: str, sent_ts,

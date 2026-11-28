@@ -86,10 +86,10 @@ def _init():
 
 
 # ------------------------------------------------------------------ yozish
-def record_signal(sig) -> int:
+def record_signal(sig, sent_ts=None) -> int:
     """sig: signals.amd_volume.Signal (sig.tf = '15m' | '1h' | '4h' | '1d').
     Qaytaradi: sent_ts (soniya) — Mini App havolasi (symbol + sent_ts) shu bilan signalni topadi."""
-    sent_ts = int(time.time())
+    sent_ts = int(sent_ts) if sent_ts else int(time.time())
     with db.tx() as conn:
         conn.execute(
             "INSERT INTO signals (symbol, tf, side, score, entry, sl, tp1, tp2, rr1, rr2, "

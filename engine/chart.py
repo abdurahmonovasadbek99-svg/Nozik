@@ -6,6 +6,7 @@ Signal kartasi (rasm) generatsiyasi — "Fxabot" dizayni uslubida:
 Thread-safe: pyplot emas, Figure ob'ekti ishlatiladi (asyncio.to_thread ichida xavfsiz).
 Rasmda emoji ishlatilmaydi (matplotlib shriftida yo'q) — faqat DejaVu belgilar (▲ ▼ ✓ ✗ → •).
 """
+import gc
 from datetime import datetime, timezone
 from io import BytesIO
 from math import ceil, floor, log10
@@ -348,6 +349,11 @@ def generate_candle_chart(symbol: str, candles: list, direction: str = "neutral"
         ov.text(W / 2, 878, T["disclaimer"], color=DIM, fontsize=5.8, ha="center", va="center")
 
     buf = BytesIO()
-    fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    try:
+        fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    finally:
+        fig.clear()                      # 512MB: har signalda Figure xotirasini darhol bo'shatish
+        del fig
+        gc.collect()                     # o'lchandi: gc'siz 40 grafikda 73->123MB, gc bilan 74MB
     buf.seek(0)
     return buf

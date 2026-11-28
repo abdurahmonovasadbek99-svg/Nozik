@@ -109,6 +109,7 @@ REGISTRY: List[P] = [
     P("PUMP_TAKER_REJECT", "float", G_PDF, "Тейкеры: отказ ≤", "Строгий режим: если доля тейкеров за движение ≤ этого — сигнал отклоняется.", 0.2, 0.5, 0.02),
     P("PUMP_LIQ_MIN_USD", "float", G_PDF, "Ликвидации: мин. $", "Минимальная сумма ликвидаций за окно, чтобы влиять на скор (USD).", 1000, 1e7, 5000),
     P("PUMP_PRE", "bool", G_PD, "Предупр. «накопление»", "Предупреждение: OI растёт, цена тихая (возможен импульс). Не сигнал входа."),
+    P("PUMP_PRE_STANDALONE", "bool", G_PD, "Накопление отдельно", "Выкл: «накопление» не шлётся отдельным сообщением, а добавляется строкой в сигнал по этой же монете. Вкл: отдельные предупреждения (только с понятным уклоном)."),
     P("PUMP_PRE_OI_PCT", "float", G_PD, "Накопление: OI ≥ %", "Рост OI за ~15 мин, при котором шлём предупреждение.", 1, 20, 0.5),
     P("PUMP_PRE_PRICE_PCT", "float", G_PD, "Накопление: цена ≤ %", "Максимальное движение цены за 15 мин (±%), чтобы считать её «тихой».", 0.2, 5, 0.2),
     P("AMD_USE_CTX", "bool", G_AMD2, "AMD: OI/funding/L-S", "Корректировать скор AMD-сигнала по OI, funding, L/S и тейкерам (±10 макс.)."),
@@ -179,7 +180,7 @@ _CFG_MAP: Dict[str, Tuple[str, bool]] = {
 # Ishlayotgan job'larni qayta rejalashtirish kerak bo'lgan parametrlar: kalit -> (job nomi, min interval)
 _JOBS = {
     "SCAN_INTERVAL_SECONDS": ("background_scan", 30),
-    "PUMP_SCAN_INTERVAL_SECONDS": ("_job_scan", 30),
+    "PUMP_SCAN_INTERVAL_SECONDS": ("pump_scan", 30),
 }
 
 # (past, yuqori) juftliklar: past < yuqori bo'lishi shart
