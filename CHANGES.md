@@ -1,3 +1,14 @@
+# v7.1: xatolarni tuzatish (Render bepul tarifi) + "накопление" signalga bog'landi
+
+- Job nomlari: background_scan, evaluate, pump_scan, pump_eval, swing_scan, swing_eval. /params orqali interval o'zgarganda eski job endi topilib o'chadi (ikki marta ishlash yo'q).
+- _post_init: liq oqimi xatosi botni to'xtatmaydi.
+- chart.py: fig.clear() + gc.collect() (o'lchandi: 40 grafikda 123MB -> 74MB).
+- Pump yo'nalishi: 5m va 15m qarama-qarshi va 15m dominant bo'lsa signal rad etiladi.
+- Yuborish tartibi: avval Telegram, keyin DB (record_signal(sig, sent_ts)); tg.broadcast endi yetib borgan chatlar sonini qaytaradi. Hech kimga yetmasa DB'ga yozilmaydi, cooldown boshlanmaydi.
+- "НАКОПЛЕНИЕ": endi alohida yuborilmaydi (PUMP_PRE_STANDALONE=0); shu coin bo'yicha signal chiqsa, kartaga qator qo'shiladi (90 daqiqa ichida). Yoqilsa ham "неясно" uklon yuborilmaydi.
+- Standartlar: SCAN_WORKERS 4, PUMP_WORKERS 3, PUMP_SCAN_INTERVAL 90, PUMP_MAX_CANDIDATES 15, PUMP_BACKTEST_BARS 2880.
+- Test: sintetik (stub telegram). Jonli Bybit/Telegramda sinalmagan.
+
 # v7.0: tezlik (parallel so'rovlar) + aniqlikni O'LCHASH (/features)
 
 **Tezlik**

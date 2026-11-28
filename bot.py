@@ -62,12 +62,20 @@ def _all_tfs() -> list:
     return ["15m"] + list(amd_swing.ENABLED)
 
 
-async def _send_signal(bot, s):
+async def _send_signal(bot, s) -> int:
+    """Qaytaradi: nechta chatga yetib bordi."""
     buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                               tg.levels_of(s), s.tf, tg.meta_of(s, CFG))
-    await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, CFG), buf, parse_mode="HTML",
-                       reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)),
-                       track=(s.symbol, s.tf, getattr(s, "sent_ts", None)))
+    text = tg.format_signal(s, CFG)
+    try:
+        note = pump_detector.pre_note(s.symbol, s.side)    # shu coin bo'yicha yaqindagi "накопление"
+    except Exception:
+        note = ""
+    if note:
+        text += "\n" + note
+    return await tg.broadcast(bot, ADMIN_CHAT_IDS, text, buf, parse_mode="HTML",
+                              reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)),
+                              track=(s.symbol, s.tf, getattr(s, "sent_ts", None)))
 
 
 async def _run_scan(bot, force: bool = False):
@@ -92,9 +100,16 @@ async def _run_scan(bot, force: bool = False):
             if not await asyncio.to_thread(enrich_signal, s, CFG["min_score"]):   # v6.9: OI/funding/L-S/taker
                 skipped += 1
                 continue
-            s.sent_ts = await asyncio.to_thread(record_signal, s)   # cooldown faqat YUBORILGAN signaldan boshlanadi
+            s.sent_ts = int(time.time())     # avval yuboramiz; cooldown faqat YUBORILGAN signaldan boshlanadi
+            if not await _send_signal(bot, s):
+                logger.warning(f"{s.symbol}: signal yuborilmadi — bazaga yozilmadi")
+                skipped += 1
+                continue
+            try:
+                await asyncio.to_thread(record_signal, s, s.sent_ts)
+            except Exception as e:
+                logger.error(f"{s.symbol}: signalni bazaga yozishda xato: {e}")
             await asyncio.to_thread(features.record, s)               # v7.0
-            await _send_signal(bot, s)
             sent += 1
         return sent, skipped, len(sigs)
 
@@ -404,8 +419,17 @@ def run_health_server():
 
 async def _post_init(app: Application):
     if C.USE_LIQ_STREAM:                       # v6.9: likvidatsiya oqimi (fon vazifa)
-        from engine import liq
-        app.bot_data["liq_task"] = asyncio.create_task(liq.run())
+        try:
+            from engine import liq
+            task = asyncio.create_task(liq.run())
+
+            def _liq_done(t):
+                if not t.cancelled() and t.exception():
+                    logger.error(f"Likvidatsiya oqimi to'xtadi: {t.exception()}")
+            task.add_done_callback(_liq_done)
+            app.bot_data["liq_task"] = task
+        except Exception as e:                  # bot baribir ishga tushsin
+            logger.error(f"Likvidatsiya oqimi ishga tushmadi: {e}")
     await app.bot.set_my_commands([
         BotCommand("scan", "Скан рынка (AMD 15m)"),
         BotCommand("swing", "Скан 1h/4h"),
@@ -459,8 +483,10 @@ def main():
     # Скан выравнивается по часам: :00, :05, :10 ... (+15 с после закрытия свечи).
     # Bir xil yopilgan sham qayta tahlil qilinmaydi (amd.scan ichida).
     first_scan = C.SCAN_INTERVAL_SECONDS - (time.time() % C.SCAN_INTERVAL_SECONDS) + 15
-    app.job_queue.run_repeating(background_scan, interval=C.SCAN_INTERVAL_SECONDS, first=first_scan)
-    app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60)
+    app.job_queue.run_repeating(background_scan, interval=C.SCAN_INTERVAL_SECONDS, first=first_scan,
+                                  name="background_scan")
+    app.job_queue.run_repeating(scheduled_evaluate, interval=EVAL_CHECK_INTERVAL_SECONDS, first=60,
+                                  name="evaluate")
     start_self_ping()
     app.job_queue.run_daily(
         scheduled_daily_report,

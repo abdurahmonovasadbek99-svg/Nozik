@@ -60,7 +60,7 @@ USE_BTC_FILTER = os.environ.get("USE_BTC_FILTER", "1") == "1"
 
 # --- Pump/Dump detektori (AMD'dan ALOHIDA modul: signals/pump_detector.py) ---
 USE_PUMP_DETECTOR = os.environ.get("USE_PUMP_DETECTOR", "1") == "1"
-PUMP_SCAN_INTERVAL_SECONDS = _i("PUMP_SCAN_INTERVAL_SECONDS", "60")
+PUMP_SCAN_INTERVAL_SECONDS = _i("PUMP_SCAN_INTERVAL_SECONDS", "90")
 PUMP_MIN_TURNOVER_USDT = _f("PUMP_MIN_TURNOVER_USDT", "1000000")      # AMD'dan past: 1M
 PUMP_MAX_TURNOVER_USDT = _f("PUMP_MAX_TURNOVER_USDT", "300000000")
 PUMP_MOVE_5M_PCT = _f("PUMP_MOVE_5M_PCT", "3")        # 5 daqiqada shuncha % harakat
@@ -73,7 +73,7 @@ PUMP_COOLDOWN_SECONDS = _i("PUMP_COOLDOWN_SECONDS", "1800")   # bir coin, bir yo
 PUMP_MIN_WINDOW_TURNOVER_USDT = _f("PUMP_MIN_WINDOW_TURNOVER_USDT", "30000")  # oxirgi 5 daq. oborot (noto'g'ri tezlik filtri)
 PUMP_MAX_ALERTS_PER_SCAN = _i("PUMP_MAX_ALERTS_PER_SCAN", "2")
 PUMP_MAX_ALERTS_PER_HOUR = _i("PUMP_MAX_ALERTS_PER_HOUR", "8")   # bozor qulaganda spamdan himoya
-PUMP_MAX_CANDIDATES = _i("PUMP_MAX_CANDIDATES", "25")          # bir skanda 1m shamlari tekshiriladigan max coin
+PUMP_MAX_CANDIDATES = _i("PUMP_MAX_CANDIDATES", "15")          # bir skanda 1m shamlari tekshiriladigan max coin
 PUMP_EXPIRE_CANDLES = _i("PUMP_EXPIRE_CANDLES", "24")          # 5m shamlar: 24 = 2 soat
 PUMP_STRICT = os.environ.get("PUMP_STRICT", "1") == "1"       # qat'iy rejim: faqat aniq harakat (tavsiya)
 PUMP_BREAKOUT_HOURS = _i("PUMP_BREAKOUT_HOURS", "6")          # shuncha soatlik diapazon chegarasi buzilishi kerak
@@ -90,7 +90,7 @@ PUMP_TP3_RR = _f("PUMP_TP3_RR", "3")                  # TP3 = kirishdan shuncha 
 PUMP_TP3_MIN_SCORE = _i("PUMP_TP3_MIN_SCORE", "80")   # kuchli impuls: ball
 PUMP_TP3_VOL_X = _f("PUMP_TP3_VOL_X", "5")            # kuchli impuls: hajm oddiydan kamida shuncha marta
 PUMP_SEND_CHART = os.environ.get("PUMP_SEND_CHART", "1") == "1"  # xabarga grafik biriktirish
-PUMP_BACKTEST_BARS = _i("PUMP_BACKTEST_BARS", "7200")         # 1m shamlar: 7200 = 5 kun
+PUMP_BACKTEST_BARS = _i("PUMP_BACKTEST_BARS", "2880")         # 1m shamlar: 2880 = 2 kun (Render bepul tarifi uchun)
 
 # --- v6.4: pump/dump sifati (BTC beta/residual, spread, ATR, bosim, funding, orderbook) ---
 PUMP_USE_BTC_BETA = os.environ.get("PUMP_USE_BTC_BETA", "1") == "1"      # har coin uchun BTC korrelyatsiya/beta
@@ -185,6 +185,8 @@ PUMP_PRE = os.environ.get("PUMP_PRE", "1") == "1"
 PUMP_PRE_OI_PCT = _f("PUMP_PRE_OI_PCT", "3.0")                       # ~15 daqiqada OI kamida shuncha % o'sdi
 PUMP_PRE_PRICE_PCT = _f("PUMP_PRE_PRICE_PCT", "1.0")                 # ...narx esa 15 daqiqada shundan kam harakat qildi (+-%)
 PUMP_PRE_MIN_OI_USD = _f("PUMP_PRE_MIN_OI_USD", "300000")            # juda kichik OI shovqin beradi
+PUMP_PRE_STANDALONE = os.environ.get("PUMP_PRE_STANDALONE", "0") == "1"   # 0: \"накопление\" alohida yuborilmaydi — shu coin signaliga qator bo'lib qo'shiladi
+PUMP_PRE_NOTE_TTL_SEC = _i("PUMP_PRE_NOTE_TTL_SEC", "5400")               # signalga qo'shish uchun accumulation shuncha vaqt yaroqli
 PUMP_PRE_COOLDOWN_SEC = _i("PUMP_PRE_COOLDOWN_SEC", "7200")
 PUMP_PRE_MAX_PER_HOUR = _i("PUMP_PRE_MAX_PER_HOUR", "4")
 # AMD signallariga OI / funding / L/S / taker konteksti (ballga +-, ko'pi bilan AMD_CTX_MAX_ADJ)
@@ -194,5 +196,5 @@ AMD_FUNDING_CROWDED = _f("AMD_FUNDING_CROWDED", "0.10")              # % — sig
 AMD_FUNDING_FUEL = _f("AMD_FUNDING_FUEL", "0.05")                    # % — qarshi tomonda shuncha: squeeze yoqilg'isi, +3
 
 # --- v7.0: tezlik (parallel so'rovlar) ---
-SCAN_WORKERS = _i("SCAN_WORKERS", "6")        # AMD skanerida bir vaqtda nechta so'rov (Bybit limiti: 600/5s — 6 ta xavfsiz)
-PUMP_WORKERS = _i("PUMP_WORKERS", "4")        # pump nomzodlarini parallel tekshirish
+SCAN_WORKERS = _i("SCAN_WORKERS", "4")        # AMD skanerida bir vaqtda nechta so'rov (Bybit limiti: 600/5s — 6 ta xavfsiz)
+PUMP_WORKERS = _i("PUMP_WORKERS", "3")        # pump nomzodlarini parallel tekshirish
