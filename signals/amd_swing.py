@@ -130,14 +130,29 @@ async def _run(bot, force: bool = False):
                 from engine.market_ctx import enrich_signal
                 if not await asyncio.to_thread(enrich_signal, s, P["min_score"]):   # v6.9
                     continue
-                s.sent_ts = await asyncio.to_thread(record_signal, s)
-                from engine import features
-                await asyncio.to_thread(features.record, s)    # v7.0
+                s.sent_ts = int(time.time())
                 buf = await tg.make_chart(s.symbol, tg.to_dicts(s.candles), s.side.lower(),
                                           tg.levels_of(s), s.tf, tg.meta_of(s, P))
-                await tg.broadcast(bot, ADMIN_CHAT_IDS, tg.format_signal(s, P), buf, parse_mode="HTML",
-                                   reply_markup=tg.live_markup(s.symbol, getattr(s, "sent_ts", None)),
-                                   track=(s.symbol, s.tf, getattr(s, "sent_ts", None)))
+                text = tg.format_signal(s, P)
+                try:
+                    from signals import pump_detector
+                    note = pump_detector.pre_note(s.symbol, s.side)   # shu coin bo'yicha "накопление"
+                except Exception:
+                    note = ""
+                if note:
+                    text += "\n" + note
+                delivered = await tg.broadcast(bot, ADMIN_CHAT_IDS, text, buf, parse_mode="HTML",
+                                               reply_markup=tg.live_markup(s.symbol, s.sent_ts),
+                                               track=(s.symbol, s.tf, s.sent_ts))
+                if not delivered:
+                    logger.warning(f"{s.symbol} [{prof}]: signal yuborilmadi — bazaga yozilmadi")
+                    continue
+                try:
+                    await asyncio.to_thread(record_signal, s, s.sent_ts)
+                except Exception as e:
+                    logger.error(f"{s.symbol} [{prof}]: bazaga yozishda xato: {e}")
+                from engine import features
+                await asyncio.to_thread(features.record, s)    # v7.0
                 sent += 1
     return sent, found
 
@@ -269,6 +284,6 @@ def register(app):
     app.add_handler(CommandHandler("swing_stats", cmd_swing_stats))
     # Skaner soat/yarim soat chegarasiga tekislanadi (+20 s): yangi 1h/4h sham yopilgach darrov
     first = SCAN_INTERVAL - (time.time() % SCAN_INTERVAL) + 20
-    app.job_queue.run_repeating(_job_scan, interval=SCAN_INTERVAL, first=first)
-    app.job_queue.run_repeating(_job_eval, interval=EVAL_INTERVAL, first=120)
+    app.job_queue.run_repeating(_job_scan, interval=SCAN_INTERVAL, first=first, name="swing_scan")
+    app.job_queue.run_repeating(_job_eval, interval=EVAL_INTERVAL, first=120, name="swing_eval")
     logger.info(f"Swing AMD moduli yoqildi: {', '.join(ENABLED)}")

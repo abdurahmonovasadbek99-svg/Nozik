@@ -346,6 +346,9 @@ def evaluate(symbol: str, c: list, oi_chg: Optional[float] = None, regime: str =
     if max(r5, r15) < 1:
         return {"alert": None, "reject": f"движение ниже порога ({ch5:+.1f}% / 5м, {ch15:+.1f}% / 15м)", "m": m}
 
+    # 5m va 15m qarama-qarshi bo'lib, 15m kattaroq bo'lsa — bu pump/dump emas, ehtimol qaytish/korreksiya
+    if ch5 * ch15 < 0 and r15 > r5:
+        return {"alert": None, "reject": f"направления 5м и 15м расходятся ({ch5:+.1f}% / {ch15:+.1f}%)", "m": m}
     up = (ch5 if r5 >= r15 else ch15) > 0
     side, kind = ("LONG", "PUMP") if up else ("SHORT", "DUMP")
 
@@ -775,6 +778,22 @@ def _full_eval(sym: str, c: list, oi: Optional[float], regime: str, turn: float,
 _PRE_SENT: Dict[str, float] = {}          # sym -> oxirgi ogohlantirish vaqti
 _PRE_TIMES: Deque[float] = deque()        # soatlik limit uchun
 PRE_QUEUE: List[dict] = []                # scan() to'ldiradi, _run() yuboradi
+_PRE_CTX: Dict[str, dict] = {}            # sym -> oxirgi accumulation (signalga qator qo'shish uchun)
+
+
+def pre_note(symbol: str, side: Optional[str] = None, now: Optional[float] = None) -> str:
+    """Shu coin uchun yaqinda accumulation bo'lgan bo'lsa — signalga qo'shiladigan qator, aks holda ''."""
+    d = _PRE_CTX.get(symbol)
+    now = now or time.time()
+    if not d or now - d["ts"] > C.PUMP_PRE_NOTE_TTL_SEC:
+        return ""
+    mins = max(1, int((now - d["ts"]) / 60))
+    arrow = {"up": "⬆️", "down": "⬇️", "none": ""}[d["bias"]]
+    mark = ""
+    if side and d["bias"] != "none":
+        agree = (d["bias"] == "up") == (side.upper() == "LONG")
+        mark = " ✅ совпадает" if agree else " ⚠️ против"
+    return f"⏳ Накопление {mins} мин назад: OI {d['oi']:+.1f}% при тихой цене {arrow}{mark}".strip()
 
 
 def pre_scan(now: float, uni: List[Tuple[str, float, float]], exclude: set) -> List[dict]:
@@ -819,8 +838,12 @@ def pre_scan(now: float, uni: List[Tuple[str, float, float]], exclude: set) -> L
         bias = "up" if vote >= 1 else ("down" if vote <= -1 else "none")
         _PRE_SENT[sym] = now
         _PRE_TIMES.append(now)
-        out.append({"symbol": sym, "oi": oi_ch, "px": px_ch, "taker": taker, "ls": ls,
-                    "funding": fund, "bias": bias, "turn": turn})
+        d = {"symbol": sym, "oi": oi_ch, "px": px_ch, "taker": taker, "ls": ls,
+             "funding": fund, "bias": bias, "turn": turn, "ts": now}
+        _PRE_CTX[sym] = d
+        out.append(d)
+    for k in [k for k, v in _PRE_CTX.items() if now - v["ts"] > 4 * 3600]:   # xotira tozalash
+        _PRE_CTX.pop(k, None)
     return out
 
 
@@ -994,6 +1017,9 @@ def format_alert(a: Alert) -> str:
         lines.append("🧭 " + " · ".join(bits))
     if ctx:
         lines.append("🧱 " + " · ".join(ctx))
+    note = pre_note(a.symbol, a.side)
+    if note:
+        lines.append(note)
     chase = "выше" if long_ else "ниже"
     lines.append(f"⏱ ~{hours:.0f} ч · не догонять {chase} <code>{p(limit_px)}</code>")
     lines.append("💡 Подсказки по SL/TP придут ответом на это сообщение")
@@ -1228,13 +1254,7 @@ async def _run(bot) -> int:
             alerts = []
         sent = 0
         for a in alerts:
-            try:
-                a.sent_ts = await asyncio.to_thread(record_signal, a)
-            except Exception as e:
-                logger.error(f"Pump signalni yozishda xato ({a.symbol}): {e}")
-            mark_sent(a)
-            from engine import features
-            await asyncio.to_thread(features.record, a)       # v7.0: aniqlikni o'lchash uchun
+            a.sent_ts = int(time.time())          # yuborishdan OLDIN belgilanadi; bazaga esa yuborilgach yoziladi
             buf = None
             if C.PUMP_SEND_CHART:             # grafik xatosi xabarni to'xtatmaydi
                 try:
@@ -1243,15 +1263,29 @@ async def _run(bot) -> int:
                 except Exception as e:
                     logger.warning(f"Pump grafigi chizilmadi ({a.symbol}): {e}")
             a.candles = []                    # xotirani bo'shatish
-            await tg.broadcast(bot, ADMIN_CHAT_IDS, format_alert(a), buf, parse_mode="HTML",
-                               reply_markup=tg.live_markup(a.symbol, getattr(a, "sent_ts", None)),
-                               track=(a.symbol, TF, getattr(a, "sent_ts", None)))
+            delivered = await tg.broadcast(bot, ADMIN_CHAT_IDS, format_alert(a), buf, parse_mode="HTML",
+                                           reply_markup=tg.live_markup(a.symbol, a.sent_ts),
+                                           track=(a.symbol, TF, a.sent_ts))
             buf = None
+            if not delivered:                 # Telegram xatosi: DB'ga yozmaymiz, cooldown boshlanmaydi
+                logger.warning(f"Pump alert yuborilmadi ({a.symbol}) — bazaga yozilmadi, keyingi skanda qayta uriniladi")
+                continue
+            try:
+                await asyncio.to_thread(record_signal, a, a.sent_ts)
+            except Exception as e:
+                logger.error(f"Pump signalni yozishda xato ({a.symbol}): {e}")
+            mark_sent(a)
+            from engine import features
+            await asyncio.to_thread(features.record, a)       # v7.0: aniqlikni o'lchash uchun
             sent += 1
             logger.info(f"Pump alert: {a.symbol} {a.kind} skor={a.score} "
                         f"5m={a.ch5:+.1f}% x{a.vol_x:.1f}")
         pre, PRE_QUEUE[:] = list(PRE_QUEUE), []
         for d in pre:                         # v6.9: "OI o'syapti, narx tinch" ogohlantirishlari
+            if not C.PUMP_PRE_STANDALONE or d["bias"] == "none":
+                logger.info(f"Pre-alert (alohida yuborilmadi, signalga qo'shiladi): {d['symbol']} "
+                            f"OI {d['oi']:+.1f}% uklon={d['bias']}")
+                continue
             try:
                 await tg.broadcast(bot, ADMIN_CHAT_IDS, format_pre(d), None, parse_mode="HTML")
                 logger.info(f"Pre-alert: {d['symbol']} OI {d['oi']:+.1f}% narx {d['px']:+.1f}% uklon={d['bias']}")
@@ -1434,6 +1468,6 @@ def register(app):
         logger.info("Pump detektori hozir o'chirilgan (/params orqali yoqish mumkin)")
     interval = max(30, C.PUMP_SCAN_INTERVAL_SECONDS)
     first = interval - (time.time() % interval) + 5
-    app.job_queue.run_repeating(_job_scan, interval=interval, first=first)
-    app.job_queue.run_repeating(_job_eval, interval=300, first=90)
+    app.job_queue.run_repeating(_job_scan, interval=interval, first=first, name="pump_scan")
+    app.job_queue.run_repeating(_job_eval, interval=300, first=90, name="pump_eval")
     logger.info(f"Pump detektori ishga tushdi: har {interval} s")
